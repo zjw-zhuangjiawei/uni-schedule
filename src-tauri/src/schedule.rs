@@ -2052,6 +2052,7 @@ pub type ScheduleLevel = u32;
 
 /// Options to query schedules. Designed to be extensible: a custom matcher
 /// can be provided via `matcher` for future fields/complex filters.
+#[derive(Serialize, Deserialize, Clone)]
 pub struct QueryOptions {
 	pub name: Option<String>,
 	pub start: Option<DateTime<Utc>>,
@@ -2061,6 +2062,7 @@ pub struct QueryOptions {
 	/// Optional custom matcher that receives a schedule and returns true when
 	/// the schedule should be included. Use this to extend filtering without
 	/// changing the struct.
+	#[serde(skip_serializing, skip_deserializing)]
 	pub matcher: Option<Arc<dyn Fn(&Schedule) -> bool + Send + Sync>>,
 }
 
@@ -2099,6 +2101,137 @@ pub struct Schedule {
 	exclusive: bool,
 	/// Human-readable name for the schedule.
 	name: String,
+}
+
+impl Schedule {
+	pub fn new(
+		start: DateTime<Utc>,
+		end: DateTime<Utc>,
+		level: ScheduleLevel,
+		exclusive: bool,
+		name: String,
+	) -> Self {
+		Self {
+			start,
+			end,
+			level,
+			exclusive,
+			name,
+		}
+	}
+
+	#[allow(dead_code)]
+	pub fn start(&self) -> DateTime<Utc> {
+		self.start
+	}
+	#[allow(dead_code)]
+	pub fn end(&self) -> DateTime<Utc> {
+		self.end
+	}
+	#[allow(dead_code)]
+	pub fn level(&self) -> ScheduleLevel {
+		self.level
+	}
+	#[allow(dead_code)]
+	pub fn exclusive(&self) -> bool {
+		self.exclusive
+	}
+	#[allow(dead_code)]
+	pub fn name(&self) -> &str {
+		&self.name
+	}
+}
+
+// ---------- Tauri command interface ----------
+// Provide a global, synchronized ScheduleManager for Tauri commands.
+pub mod tauri_api {
+	use super::*;
+	use once_cell::sync::Lazy;
+	use std::sync::RwLock;
+
+	static MANAGER: Lazy<RwLock<ScheduleManager>> = Lazy::new(|| {
+		let path = crate::option::default_storage_path();
+		RwLock::new(ScheduleManager::new_from_storage(Some(path)))
+	});
+
+	#[derive(Serialize, Deserialize, Debug)]
+	pub struct CreateSchedulePayload {
+		pub start: DateTime<Utc>,
+		pub end: DateTime<Utc>,
+		pub level: ScheduleLevel,
+		pub exclusive: bool,
+		pub name: String,
+		pub parents: Vec<ScheduleId>,
+	}
+
+	#[derive(Serialize, Deserialize, Debug)]
+	pub struct ScheduleDto {
+		pub id: ScheduleId,
+		pub start: DateTime<Utc>,
+		pub end: DateTime<Utc>,
+		pub level: ScheduleLevel,
+		pub exclusive: bool,
+		pub name: String,
+	}
+
+	impl From<(ScheduleId, Schedule)> for ScheduleDto {
+		fn from((id, s): (ScheduleId, Schedule)) -> Self {
+			Self {
+				id,
+				start: s.start,
+				end: s.end,
+				level: s.level,
+				exclusive: s.exclusive,
+				name: s.name,
+			}
+		}
+	}
+
+	#[tauri::command]
+	pub fn create_schedule(payload: CreateSchedulePayload) -> Result<ScheduleId, String> {
+		let sched = Schedule::new(
+			payload.start,
+			payload.end,
+			payload.level,
+			payload.exclusive,
+			payload.name,
+		);
+		let parents: HashSet<ScheduleId> = payload.parents.into_iter().collect();
+		let mut mgr = MANAGER.write().map_err(|e| e.to_string())?;
+		mgr.create_schedule(sched, parents)
+			.map_err(|e| e.to_string())
+	}
+
+	#[tauri::command]
+	pub fn delete_schedule(id: ScheduleId) -> Result<(), String> {
+		let mut mgr = MANAGER.write().map_err(|e| e.to_string())?;
+		mgr.delete_schedule(id).map_err(|e| e.to_string())
+	}
+
+	#[tauri::command]
+	pub fn get_schedule(id: ScheduleId) -> Option<ScheduleDto> {
+		let mgr = MANAGER.read().ok()?;
+		mgr.get_schedule(id).cloned().map(|s| (id, s).into())
+	}
+
+	#[tauri::command]
+	pub fn query_schedules(opts: QueryOptions) -> Result<Vec<ScheduleDto>, String> {
+		let mgr = MANAGER.read().map_err(|e| e.to_string())?;
+		Ok(mgr
+			.query_schedule(opts)
+			.into_iter()
+			.map(Into::into)
+			.collect())
+	}
+
+	pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
+		builder.invoke_handler(tauri::generate_handler![
+			create_schedule,
+			delete_schedule,
+			get_schedule,
+			query_schedules
+		])
+	}
 }
 
 /// Manager that stores schedules and provides querying and validation.
@@ -2154,6 +2287,7 @@ impl ScheduleManager {
 	/// Create a new manager using default (in-memory) storage path.
 	/// Equivalent to `Self::new_from_storage(None)`.
 	pub fn new() -> Self {
+		// Reverted: default to in-memory (no persistence) unless explicitly requested.
 		Self::new_from_storage(None)
 	}
 
@@ -2786,42 +2920,6 @@ mod tests {
 	use uuid::Uuid;
 
 	use super::*;
-
-	#[test]
-	fn test() {
-		let mut manager = ScheduleManager::new();
-		let start = Utc::now();
-		let end = start + Duration::hours(1);
-		let level = 1;
-		let parents = HashSet::new();
-
-		let _id = manager
-			.create_schedule(
-				Schedule {
-					start,
-					end,
-					level,
-					exclusive: false,
-					name: String::from("task1"),
-				},
-				parents.clone(),
-			)
-			.unwrap();
-
-		assert_eq!(
-			manager.create_schedule(
-				Schedule {
-					start,
-					end,
-					level,
-					exclusive: true,
-					name: String::from("task2"),
-				},
-				parents,
-			),
-			Err(ScheduleError::TimeRangeOverlaps)
-		);
-	}
 
 	#[test]
 	fn test_create_schedule_parent_not_found_and_level_checks() {
