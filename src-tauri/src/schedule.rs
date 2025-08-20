@@ -9,6 +9,7 @@ use std::{
 };
 // use tantivy::{doc, schema::*, Index, IndexWriter, Term};  // Commented out - full-text search disabled
 use thiserror::Error;
+use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 // Make ScheduleId available for the lapper module which is defined below.
@@ -2052,12 +2053,36 @@ pub type ScheduleLevel = u32;
 
 /// Options to query schedules. Designed to be extensible: a custom matcher
 /// can be provided via `matcher` for future fields/complex filters.
-#[derive(Serialize, Deserialize, Clone)]
+///
+/// # Examples
+///
+/// Using the builder pattern:
+/// ```
+/// let opts = QueryOptions::builder()
+///     .name("task".to_string())
+///     .level(1)
+///     .exclusive(true)
+///     .build();
+/// ```
+///
+/// Or with default values:
+/// ```
+/// let opts = QueryOptions::builder()
+///     .name("task".to_string())
+///     .build();
+/// ```
+#[derive(Serialize, Deserialize, Clone, TypedBuilder)]
+#[builder(field_defaults(default))]
 pub struct QueryOptions {
+	#[builder(default, setter(into, strip_option))]
 	pub name: Option<String>,
+	#[builder(default, setter(into, strip_option))]
 	pub start: Option<DateTime<Utc>>,
+	#[builder(default, setter(into, strip_option))]
 	pub stop: Option<DateTime<Utc>>,
+	#[builder(default, setter(into, strip_option))]
 	pub level: Option<ScheduleLevel>,
+	#[builder(default, setter(into, strip_option))]
 	pub exclusive: Option<bool>,
 	/// Optional custom matcher that receives a schedule and returns true when
 	/// the schedule should be included. Use this to extend filtering without
@@ -3309,5 +3334,44 @@ mod tests {
 		});
 		assert_eq!(out.len(), 1);
 		assert_eq!(out[0].0, id1);
+	}
+
+	#[test]
+	fn test_query_options_typed_builder() {
+		// Test the new TypedBuilder pattern
+		let opts1 = QueryOptions::builder()
+			.name("test-task".to_string())
+			.level(1u32)
+			.exclusive(true)
+			.build();
+
+		assert_eq!(opts1.name, Some("test-task".to_string()));
+		assert_eq!(opts1.level, Some(1u32));
+		assert_eq!(opts1.exclusive, Some(true));
+		assert_eq!(opts1.start, None);
+		assert_eq!(opts1.stop, None);
+		assert!(opts1.matcher.is_none());
+
+		// Test with minimal fields
+		let opts2 = QueryOptions::builder()
+			.name("simple-task".to_string())
+			.build();
+
+		assert_eq!(opts2.name, Some("simple-task".to_string()));
+		assert_eq!(opts2.level, None);
+		assert_eq!(opts2.exclusive, None);
+
+		// Test with datetime fields
+		let start_time = Utc::now();
+		let stop_time = start_time + chrono::Duration::hours(1);
+
+		let opts3 = QueryOptions::builder()
+			.start(start_time)
+			.stop(stop_time)
+			.build();
+
+		assert_eq!(opts3.start, Some(start_time));
+		assert_eq!(opts3.stop, Some(stop_time));
+		assert_eq!(opts3.name, None);
 	}
 }
