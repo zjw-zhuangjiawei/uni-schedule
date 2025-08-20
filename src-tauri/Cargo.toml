@@ -1,0 +1,30 @@
+[package]
+name = "uni-schedule"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["Zhuang Jiawei"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "uni_schedule_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = "2"
+
+[dependencies]
+tauri = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+chrono = { version = "0.4.41", features = ["serde"] }
+uuid = { version = "1.18.0", features = ["v7", "serde"] }
+thiserror = "2.0.14"
+tantivy = "0.19"
+native_db = "0.8.1"
+native_model = "0.4.20"
+once_cell = "1.20"
