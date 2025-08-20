@@ -7,7 +7,7 @@ use std::{
 	path::PathBuf,
 	sync::Arc,
 };
-use tantivy::{collector::TopDocs, doc, query::QueryParser, schema::*, Index, IndexWriter, Term};
+// use tantivy::{doc, schema::*, Index, IndexWriter, Term};  // Commented out - full-text search disabled
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -2271,16 +2271,20 @@ pub struct ScheduleManager {
 	/// quickly narrow queries by level.
 	level_index: HashMap<ScheduleLevel, HashSet<ScheduleId>>,
 
-	// Tantivy full-text index for `name` field (in-memory directory).
+	/// Storage path for persistent data (None for in-memory only).
 	#[serde(skip)]
-	fulltext_index: Option<Index>,
-	ft_id_field: Option<Field>,
-	ft_name_field: Option<Field>,
-	/// Reusable writer for incremental indexing (not serialized)
-	#[serde(skip)]
-	ft_writer: Option<IndexWriter>,
-	#[serde(skip)]
-	ft_pending_ops: usize,
+	storage_path: Option<PathBuf>,
+	// Full-text search functionality disabled
+	// // Tantivy full-text index for `name` field (in-memory directory).
+	// #[serde(skip)]
+	// fulltext_index: Option<Index>,
+	// ft_id_field: Option<Field>,
+	// ft_name_field: Option<Field>,
+	// /// Reusable writer for incremental indexing (not serialized)
+	// #[serde(skip)]
+	// ft_writer: Option<IndexWriter>,
+	// #[serde(skip)]
+	// ft_pending_ops: usize,
 }
 
 impl ScheduleManager {
@@ -2402,7 +2406,8 @@ impl ScheduleManager {
 			.insert(schedule_id);
 
 		// Persist to storage (best-effort)
-		if let Ok(store) = storage::Storage::open_or_create(None) {
+		let db_path = self.storage_path.as_ref().map(|p| p.join("schedules.db"));
+		if let Ok(store) = storage::Storage::open_or_create(db_path) {
 			let item = PersistSchedule {
 				id: schedule_id.to_string(),
 				start: schedule.start,
@@ -2418,13 +2423,15 @@ impl ScheduleManager {
 			}
 		}
 
-		// Update full-text index
-		self.ft_add_schedule(schedule_id, &schedule);
-		self.ft_maybe_commit(true);
+		// Update full-text index - disabled
+		// self.ft_add_schedule(schedule_id, &schedule);
+		// self.ft_maybe_commit(true);
 
 		Ok(())
 	}
 
+	// Full-text search functionality disabled
+	/*
 	/// Build a tantivy index. If `path` is `Some`, attempt to open or create
 	/// a disk-backed index under `path.join("tantivy")`. If `None` an
 	/// in-memory index is returned.
@@ -2459,13 +2466,15 @@ impl ScheduleManager {
 		let idx = Index::create_in_ram(schema);
 		Some((idx, id_field, name_field))
 	}
+	*/
 
 	// Attempt to open storage and load existing schedules. We do this after
 	// creating the basic in-memory structures above. Errors are ignored to
 	// keep backward compatibility (if storage is unavailable we continue
 	// with an empty manager).
 	fn load_from_storage(&mut self, path: Option<PathBuf>) {
-		if let Ok(store) = storage::Storage::open_or_create(path) {
+		let db_path = path.as_ref().map(|p| p.join("schedules.db"));
+		if let Ok(store) = storage::Storage::open_or_create(db_path) {
 			if let Ok(items) = store.load_all() {
 				for it in items {
 					if let Ok(id) = Uuid::parse_str(&it.id) {
@@ -2511,6 +2520,8 @@ impl ScheduleManager {
 
 	// construct a manager without loading persistent storage
 	fn new_base(storage_path: Option<PathBuf>) -> Self {
+		// Full-text search functionality disabled
+		/*
 		let (tantivy_index, id_field, name_field) =
 			match Self::build_tantivy_index(storage_path.as_ref()) {
 				Some((idx, ft_id_field, ft_name_field)) => {
@@ -2518,6 +2529,7 @@ impl ScheduleManager {
 				}
 				None => (None, None, None),
 			};
+		*/
 		Self {
 			schedules: HashMap::new(),
 			exclusive_index: BTreeMap::new(),
@@ -2525,11 +2537,13 @@ impl ScheduleManager {
 			parent_relations: HashMap::new(),
 			child_relations: HashMap::new(),
 			level_index: HashMap::new(),
-			fulltext_index: tantivy_index,
-			ft_id_field: id_field,
-			ft_name_field: name_field,
-			ft_writer: None,
-			ft_pending_ops: 0,
+			storage_path,
+			// Full-text search fields commented out
+			// fulltext_index: tantivy_index,
+			// ft_id_field: id_field,
+			// ft_name_field: name_field,
+			// ft_writer: None,
+			// ft_pending_ops: 0,
 		}
 	}
 
@@ -2538,6 +2552,8 @@ impl ScheduleManager {
 	pub fn new_from_storage(path: Option<PathBuf>) -> Self {
 		let mut mgr = Self::new_base(path.clone());
 		mgr.load_from_storage(path);
+		// Full-text search functionality disabled
+		/*
 		// Minimal optimization: only rebuild the full-text name index when
 		// the existing on-disk (or in-memory) index doc count differs from
 		// the number of loaded schedules, or when the index appears empty.
@@ -2560,10 +2576,13 @@ impl ScheduleManager {
 		if should_rebuild {
 			mgr.rebuild_name_index();
 		}
-		mgr.init_fulltext_writer();
+		*/
+		// mgr.init_fulltext_writer();  // Disabled - full-text search functionality removed
 		mgr
 	}
 
+	// Full-text search functionality disabled
+	/*
 	/// Bulk rebuild tantivy name index after loading storage.
 	fn rebuild_name_index(&self) {
 		if let (Some(idx), Some(id_field), Some(name_field)) =
@@ -2587,7 +2606,10 @@ impl ScheduleManager {
 			self.ft_pending_ops = 0;
 		}
 	}
+	*/
 
+	// Full-text search functionality disabled
+	/*
 	/// Flush pending writer operations if threshold reached or on demand.
 	fn ft_maybe_commit(&mut self, force: bool) {
 		const FT_COMMIT_THRESHOLD: usize = 32; // tune as needed
@@ -2625,6 +2647,7 @@ impl ScheduleManager {
 			self.ft_maybe_commit(false);
 		}
 	}
+	*/
 
 	/// Creates a new schedule and adds it to the manager.
 	///
@@ -2731,11 +2754,12 @@ impl ScheduleManager {
 		// Remove from schedules map
 		self.schedules.remove(&schedule_id);
 
-		// Update full-text index
-		self.ft_delete_schedule(schedule_id);
+		// Update full-text index - disabled
+		// self.ft_delete_schedule(schedule_id);
 
 		// Remove from storage (best-effort)
-		if let Ok(store) = storage::Storage::open_or_create(None) {
+		let db_path = self.storage_path.as_ref().map(|p| p.join("schedules.db"));
+		if let Ok(store) = storage::Storage::open_or_create(db_path) {
 			let item = PersistSchedule {
 				id: schedule_id.to_string(),
 				start: schedule.start,
@@ -2776,42 +2800,7 @@ impl ScheduleManager {
 			}
 		}
 
-		// If a name filter exists and tantivy is available, use cached field handles for full-text search.
-		if let Some(ref name_filter) = opts.name {
-			if let (Some(idx), Some(name_field), Some(id_field)) =
-				(&self.fulltext_index, self.ft_name_field, self.ft_id_field)
-			{
-				let qp = QueryParser::for_index(idx, vec![name_field]);
-				if let Ok(query) = qp.parse_query(name_filter) {
-					if let Ok(reader) = idx.reader() {
-						let searcher = reader.searcher();
-						if let Ok(top_docs) = searcher.search(&*query, &TopDocs::with_limit(10000))
-						{
-							let mut name_ids = HashSet::new();
-							for (_score, doc_address) in top_docs {
-								if let Ok(retr_doc) = searcher.doc(doc_address) {
-									if let Some(value) = retr_doc.get_first(id_field) {
-										if let Some(text) = value.as_text() {
-											if let Ok(uuid) = Uuid::parse_str(text) {
-												name_ids.insert(uuid);
-											}
-										}
-									}
-								}
-							}
-							match candidates {
-								Some(ref mut c) => {
-									*c = c.intersection(&name_ids).cloned().collect();
-								}
-								None => {
-									candidates = Some(name_ids);
-								}
-							}
-						}
-					}
-				}
-			}
-		}
+		// Full-text search (tantivy) candidate narrowing temporarily disabled; name filtering is applied later linearly.
 
 		// If exclusive filter is specified, intersect with computed exclusive set
 		if let Some(excl) = opts.exclusive {
