@@ -53,20 +53,25 @@ export const DebugSchedulePanel: React.FC<DebugSchedulePanelProps> = ({
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
+    console.log("DebugSchedulePanel.refresh() start");
     try {
       const data = await querySchedules({});
+      console.log("DebugSchedulePanel.refresh() success, items=", data.length);
       setSchedules(data);
       onDataChange?.();
     } catch (e) {
+      console.error("DebugSchedulePanel.refresh() error", e);
       const errorMessage = e instanceof Error ? e.message : String(e);
       setError(errorMessage);
     } finally {
       setLoading(false);
+      console.log("DebugSchedulePanel.refresh() end");
     }
   }, [onDataChange]);
 
   useEffect(() => {
     if (open) {
+      console.log("DebugSchedulePanel useEffect open=true -> refresh() called");
       refresh();
     }
   }, [open, refresh]);

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { querySchedules } from "../api/schedule";
 import type { Schedule, QueryScheduleOptions, LoadingState } from "../types";
 
-export function useSchedules(options: QueryScheduleOptions = {}) {
+export function useSchedules(options?: QueryScheduleOptions) {
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [loadingState, setLoadingState] = useState<LoadingState>({
     isLoading: false,
@@ -13,7 +13,7 @@ export function useSchedules(options: QueryScheduleOptions = {}) {
     setLoadingState((prev) => ({ ...prev, isLoading: true, error: null }));
 
     try {
-      const data = await querySchedules(options);
+      const data = await querySchedules(options || {});
       setSchedules(data);
     } catch (error) {
       const errorMessage =

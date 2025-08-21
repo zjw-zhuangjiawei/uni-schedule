@@ -18,7 +18,7 @@ interface VerticalGanttProps {
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
-export default function VerticalGantt({
+const VerticalGantt: React.FC<VerticalGanttProps> = ({
   tasks,
   rowHeight = 28,
   dateColumnWidth = 120,
@@ -26,7 +26,7 @@ export default function VerticalGantt({
   range,
   maxLanesPerLevel = 6,
   debugDurations = false,
-}: VerticalGanttProps) {
+}: VerticalGanttProps) => {
   const parsedTasks = useMemo(
     () =>
       tasks.map((task) => ({
@@ -70,17 +70,6 @@ export default function VerticalGantt({
   }, [parsedTasks, range]);
 
   const { minStart, totalDays } = timeCalculations;
-
-  if (parsedTasks.length === 0) {
-    return (
-      <EmptyState>
-        <EmptyStateText>No tasks to display</EmptyStateText>
-        <EmptyStateSubtext>
-          Add some schedules using the debug panel
-        </EmptyStateSubtext>
-      </EmptyState>
-    );
-  }
   // ---------------------------------------------------------------------------
   // Lane assignment & overflow handling (per level) based on duration priority
   // ---------------------------------------------------------------------------
@@ -205,6 +194,22 @@ export default function VerticalGantt({
 
   // Simple popover state for overflow (one at a time). Key = `${level}`
   const [openOverflow, setOpenOverflow] = useState<number | null>(null);
+
+  // If there are no tasks, render an empty state but ALL hooks above have already been called
+  if (parsedTasks.length === 0) {
+    return (
+      <Wrapper>
+        <Inner>
+          <EmptyState>
+            <EmptyStateText>No tasks to display</EmptyStateText>
+            <EmptyStateSubtext>
+              Add some schedules using the debug panel
+            </EmptyStateSubtext>
+          </EmptyState>
+        </Inner>
+      </Wrapper>
+    );
+  }
 
   return (
     <Wrapper>
@@ -347,7 +352,9 @@ export default function VerticalGantt({
       </Inner>
     </Wrapper>
   );
-}
+};
+
+export default VerticalGantt;
 
 const Wrapper = styled.div`
   width: 100%;

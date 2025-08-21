@@ -57,7 +57,19 @@ function App() {
         <h1 style={{ margin: 0, fontSize: 24, fontWeight: 600 }}>
           University Schedule
         </h1>
-        <Button variant="primary" onClick={debugPanel.toggle}>
+        <Button
+          variant="primary"
+          onClick={() => {
+            console.log("DebugPanel toggle before", debugPanel.value);
+            debugPanel.toggle();
+            // state updates are async; log shortly after to observe new value
+            setTimeout(
+              () =>
+                console.log("DebugPanel value after (async)", debugPanel.value),
+              0,
+            );
+          }}
+        >
           {debugPanel.value ? "Hide" : "Show"} Debug Panel
         </Button>
       </header>
