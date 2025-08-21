@@ -14,6 +14,8 @@ pub mod data {
   pub type ScheduleModel = v1::ScheduleModel;
 
   pub mod v1 {
+    use crate::schedule::ScheduleId;
+
     use super::*;
 
     #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -21,15 +23,16 @@ pub mod data {
     #[native_db]
     pub struct ScheduleModel {
       #[primary_key]
-      pub id: u128,
+      pub key: Vec<u8>,
+      pub id: ScheduleId,
       pub start: chrono::DateTime<chrono::Utc>,
       pub end: chrono::DateTime<chrono::Utc>,
       pub level: u32,
       pub exclusive: bool,
       pub name: String,
       // Persist parent and child relationships as vectors of UUIDs
-      pub parents: Vec<u128>,
-      pub children: Vec<u128>,
+      pub parents: Vec<ScheduleId>,
+      pub children: Vec<ScheduleId>,
     }
   }
 }

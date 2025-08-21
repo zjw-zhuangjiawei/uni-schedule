@@ -7,20 +7,12 @@ use std::{
   path::PathBuf,
   sync::Arc,
 };
-// use tantivy::{doc, schema::*, Index, IndexWriter, Term};  // Commented out - full-text search disabled
 use thiserror::Error;
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
-// Make ScheduleId available for the lapper module which is defined below.
+// Alias used throughout the module for schedule identifiers.
 pub type ScheduleId = Uuid;
-
-/// Interval indexing helper used by the schedule manager.
-///
-/// The `lapper` module provides a small interval-indexing data structure
-/// intended for fast overlap queries and simple coverage checks. It stores
-/// intervals in an augmented binary search tree (nodes carry a `max` value
-/// for subtree end-times) and maintains sorted snapshot vectors (`intervals`,
 /// `starts`, `stops`) for compatibility and some linear-time operations.
 ///
 /// Typical usage (internal to this crate): build a `Lapper`, insert
@@ -657,51 +649,22 @@ mod lapper {
     where
       D: serde::Deserializer<'de>,
     {
-      use serde::de::{self, MapAccess, Visitor};
-      use std::fmt;
-
+      // Deserialize into a small helper then rebuild the interval set and
+      // the balanced AVL tree using existing helpers. This avoids the
+      // Visitor/MapAccess boilerplate while preserving compatibility with
+      // the `serialize` implementation which writes an `intervals` field.
       #[derive(Deserialize)]
-      #[serde(field_identifier, rename_all = "lowercase")]
-      enum Field {
-        Intervals,
+      struct Helper {
+        intervals: Vec<Interval>,
       }
 
-      struct LapperVisitor;
-
-      impl<'de> Visitor<'de> for LapperVisitor {
-        type Value = Lapper;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-          formatter.write_str("struct Lapper")
-        }
-
-        fn visit_map<V>(self, mut map: V) -> Result<Lapper, V::Error>
-        where
-          V: MapAccess<'de>,
-        {
-          let mut intervals = None;
-
-          while let Some(key) = map.next_key()? {
-            match key {
-              Field::Intervals => {
-                if intervals.is_some() {
-                  return Err(de::Error::duplicate_field("intervals"));
-                }
-                intervals = Some(map.next_value::<BTreeSet<Interval>>()?);
-              }
-            }
-          }
-
-          let intervals = intervals.ok_or_else(|| de::Error::missing_field("intervals"))?;
-
-          // Reconstruct the Lapper from intervals only
-          // This will rebuild both the BST and the BTreeSet automatically
-          Ok(Lapper::new(intervals))
-        }
-      }
-
-      const FIELDS: &[&str] = &["intervals"];
-      deserializer.deserialize_struct("Lapper", FIELDS, LapperVisitor)
+      let helper = Helper::deserialize(deserializer)?;
+      let interval_set: BTreeSet<Interval> = helper.intervals.into_iter().collect();
+      let root = Lapper::build_balanced(&interval_set);
+      Ok(Lapper {
+        intervals: interval_set,
+        root,
+      })
     }
   }
 
@@ -2038,7 +2001,7 @@ pub type ScheduleLevel = u32;
 /// # Examples
 ///
 /// Using the builder pattern:
-/// ```
+/// ```rust,ignore
 /// let opts = QueryOptions::builder()
 ///     .name("task".to_string())
 ///     .level(1)
@@ -2047,7 +2010,7 @@ pub type ScheduleLevel = u32;
 /// ```
 ///
 /// Or with default values:
-/// ```
+/// ```rust,ignore
 /// let opts = QueryOptions::builder()
 ///     .name("task".to_string())
 ///     .build();
@@ -2152,6 +2115,8 @@ impl Schedule {
 // Provide a global, synchronized ScheduleManager for Tauri commands.
 pub mod tauri_api {
   use super::*;
+
+  // ...existing code...
   use once_cell::sync::Lazy;
   use std::sync::RwLock;
 
@@ -2497,7 +2462,8 @@ impl ScheduleManager {
     let db_path = self.storage_path.as_ref().map(|p| p.join("schedules.db"));
     if let Ok(store) = storage::Storage::open_or_create(db_path) {
       let item = PersistSchedule {
-        id: schedule_id.as_u128(),
+        key: schedule_id.as_bytes().to_vec(),
+        id: schedule_id,
         start: schedule.start,
         end: schedule.end,
         level: schedule.level,
@@ -2506,12 +2472,12 @@ impl ScheduleManager {
         parents: self
           .parent_relations
           .get(&schedule_id)
-          .map(|s| s.iter().map(|id| id.as_u128()).collect())
+          .map(|s| s.iter().copied().collect())
           .unwrap_or_default(),
         children: self
           .child_relations
           .get(&schedule_id)
-          .map(|s| s.iter().map(|id| id.as_u128()).collect())
+          .map(|s| s.iter().copied().collect())
           .unwrap_or_default(),
       };
       if let Err(e) = store.upsert(item) {
@@ -2574,8 +2540,14 @@ impl ScheduleManager {
     let db_path = path.as_ref().map(|p| p.join("schedules.db"));
     if let Ok(store) = storage::Storage::open_or_create(db_path) {
       if let Ok(items) = store.load_all() {
+        // Collect intervals per level and batch-insert into Lapper to avoid
+        // repeated rebalancing during load. This is significantly faster
+        // when loading many schedules.
+        let mut exclusive_batches: HashMap<ScheduleLevel, Vec<Interval>> = HashMap::new();
+        let mut all_batches: HashMap<ScheduleLevel, Vec<Interval>> = HashMap::new();
+
         for it in items {
-          let id: ScheduleId = Uuid::from_u128(it.id);
+          let id: ScheduleId = it.id;
           let sched = Schedule {
             start: it.start,
             end: it.end,
@@ -2584,62 +2556,59 @@ impl ScheduleManager {
             name: it.name,
           };
 
-          // insert into in-memory structures
-          if sched.exclusive {
-            let lap = self
-              .exclusive_index
-              .entry(sched.level)
-              .or_insert_with(|| Lapper::new(std::collections::BTreeSet::new()));
-            lap.insert(Interval {
-              start: sched.start,
-              stop: sched.end,
-              val: id,
-            });
-          }
-
-          let lap_all = self
-            .all_index
-            .entry(sched.level)
-            .or_insert_with(|| Lapper::new(std::collections::BTreeSet::new()));
-          lap_all.insert(Interval {
+          // Collect intervals for batch insertion
+          let iv = Interval {
             start: sched.start,
             stop: sched.end,
             val: id,
-          });
+          };
+          if sched.exclusive {
+            exclusive_batches
+              .entry(sched.level)
+              .or_default()
+              .push(iv.clone());
+          }
+          all_batches.entry(sched.level).or_default().push(iv);
 
           self.level_index.entry(sched.level).or_default().insert(id);
           self.schedules.insert(id, sched);
+
           // reconstruct parent/child relations from persisted u128 vectors
           if !it.parents.is_empty() {
-            let pset: HashSet<ScheduleId> = it
-              .parents
-              .iter()
-              .cloned()
-              .map(|v| Uuid::from_u128(v))
-              .collect();
+            let pset: HashSet<ScheduleId> = it.parents.iter().cloned().collect();
             self.parent_relations.insert(id, pset.clone());
             for p in it.parents.iter().cloned() {
-              let pu = Uuid::from_u128(p);
-              self.child_relations.entry(pu).or_default().insert(id);
+              self.child_relations.entry(p).or_default().insert(id);
             }
           }
           if !it.children.is_empty() {
-            let cset: HashSet<ScheduleId> = it
-              .children
-              .iter()
-              .cloned()
-              .map(|v| Uuid::from_u128(v))
-              .collect();
+            let cset: HashSet<ScheduleId> = it.children.iter().cloned().collect();
             self
               .child_relations
               .entry(id)
               .or_default()
               .extend(cset.iter().cloned());
             for c in it.children.iter().cloned() {
-              let cu = Uuid::from_u128(c);
-              self.parent_relations.entry(cu).or_default().insert(id);
+              self.parent_relations.entry(c).or_default().insert(id);
             }
           }
+        }
+
+        // Now perform batch insertions per level. Use `insert_batch` which
+        // rebuilds the lapper tree once per level instead of per-item.
+        for (level, vec) in all_batches {
+          let lap = self
+            .all_index
+            .entry(level)
+            .or_insert_with(|| Lapper::new(std::collections::BTreeSet::new()));
+          lap.insert_batch(vec);
+        }
+        for (level, vec) in exclusive_batches {
+          let lap = self
+            .exclusive_index
+            .entry(level)
+            .or_insert_with(|| Lapper::new(std::collections::BTreeSet::new()));
+          lap.insert_batch(vec);
         }
       }
     }
@@ -2889,7 +2858,8 @@ impl ScheduleManager {
     let db_path = self.storage_path.as_ref().map(|p| p.join("schedules.db"));
     if let Ok(store) = storage::Storage::open_or_create(db_path) {
       let item = PersistSchedule {
-        id: schedule_id.as_u128(),
+        key: schedule_id.as_bytes().to_vec(),
+        id: schedule_id,
         start: schedule.start,
         end: schedule.end,
         level: schedule.level,
@@ -3039,6 +3009,27 @@ mod tests {
   use uuid::Uuid;
 
   use super::*;
+
+  /// Test helpers for creating intervals used by multiple tests in this module.
+  fn create_interval(start: DateTime<Utc>, duration_hours: i64) -> Interval {
+    Interval {
+      start,
+      stop: start + Duration::hours(duration_hours),
+      val: Uuid::now_v7(),
+    }
+  }
+
+  fn create_interval_with_id(
+    start: DateTime<Utc>,
+    duration_hours: i64,
+    id: ScheduleId,
+  ) -> Interval {
+    Interval {
+      start,
+      stop: start + Duration::hours(duration_hours),
+      val: id,
+    }
+  }
 
   #[test]
   fn test_create_schedule_parent_not_found_and_level_checks() {
@@ -3397,6 +3388,169 @@ mod tests {
     let ids: Vec<_> = out.into_iter().map(|(i, _)| i).collect();
     assert!(ids.contains(&id1));
     assert!(ids.contains(&id2));
+  }
+
+  #[test]
+  fn ut_create_with_missing_parent_returns_parent_not_found() {
+    let mut manager = ScheduleManager::new();
+    let start = Utc::now();
+    let end = start + Duration::hours(1);
+    let mut parents = HashSet::new();
+    parents.insert(Uuid::now_v7()); // non-existent parent
+
+    let res = manager.create_schedule(
+      Schedule {
+        start,
+        end,
+        level: 1,
+        exclusive: false,
+        name: "child-missing-parent".into(),
+      },
+      parents,
+    );
+
+    assert_eq!(res, Err(ScheduleError::ParentNotFound));
+  }
+
+  #[test]
+  fn ut_level_and_exclusive_overlap_errors() {
+    let mut manager = ScheduleManager::new();
+    let start = Utc::now();
+    let end = start + Duration::hours(1);
+
+    // create a parent at level 1
+    let parent_id = manager
+      .create_schedule(
+        Schedule {
+          start,
+          end,
+          level: 1,
+          exclusive: false,
+          name: "parent-level1".into(),
+        },
+        HashSet::new(),
+      )
+      .unwrap();
+
+    // attempt to create a child with same level (invalid)
+    let mut parents = HashSet::new();
+    parents.insert(parent_id);
+    let res = manager.create_schedule(
+      Schedule {
+        start,
+        end,
+        level: 1,
+        exclusive: false,
+        name: "bad-child".into(),
+      },
+      parents.clone(),
+    );
+    assert_eq!(res, Err(ScheduleError::LevelExceedsParent));
+
+    // create an exclusive schedule at higher level (0)
+    // Expectation: exclusive schedules block overlapping schedules at same or lower levels,
+    // so creating an exclusive schedule that overlaps an existing level 1 schedule should be rejected.
+    let res_high = manager.create_schedule(
+      Schedule {
+        start,
+        end,
+        level: 0,
+        exclusive: true,
+        name: "exclusive-high".into(),
+      },
+      HashSet::new(),
+    );
+    assert_eq!(res_high, Err(ScheduleError::TimeRangeOverlaps));
+
+    // creating an exclusive schedule at lower numeric level that overlaps should be rejected
+    let res2 = manager.create_schedule(
+      Schedule {
+        start,
+        end,
+        level: 1,
+        exclusive: true,
+        name: "exclusive-lower".into(),
+      },
+      HashSet::new(),
+    );
+    assert_eq!(res2, Err(ScheduleError::TimeRangeOverlaps));
+  }
+
+  #[test]
+  fn ut_cascade_delete_removes_orphaned_children() {
+    let mut manager = ScheduleManager::new();
+    let start = Utc::now();
+    let end = start + Duration::hours(1);
+
+    // create parent
+    let parent_id = manager
+      .create_schedule(
+        Schedule {
+          start,
+          end,
+          level: 1,
+          exclusive: false,
+          name: "parent-cascade".into(),
+        },
+        HashSet::new(),
+      )
+      .unwrap();
+
+    // create child tied to parent
+    let mut parents = HashSet::new();
+    parents.insert(parent_id);
+    let child_id = manager
+      .create_schedule(
+        Schedule {
+          start,
+          end,
+          level: 5,
+          exclusive: false,
+          name: "child-cascade".into(),
+        },
+        parents.clone(),
+      )
+      .unwrap();
+
+    // delete parent and expect child to be removed when it has no remaining parents
+    manager.delete_schedule(parent_id).unwrap();
+    assert!(manager.get_schedule(child_id).is_none());
+  }
+
+  #[test]
+  fn ut_lapper_overlap_detection_and_ordering() {
+    let start = Utc::now();
+    let mut lapper = Lapper::new(std::collections::BTreeSet::new());
+
+    // create intervals out of order
+    let iv_a = create_interval(start + Duration::hours(4), 1);
+    let iv_b = create_interval(start + Duration::hours(1), 1);
+    let iv_c = create_interval(start + Duration::hours(3), 1);
+    let iv_d = create_interval(start + Duration::hours(2), 1);
+
+    lapper.insert(iv_a.clone());
+    lapper.insert(iv_b.clone());
+    lapper.insert(iv_c.clone());
+    lapper.insert(iv_d.clone());
+
+    // query spanning entire window should return them ordered by start
+    let found: Vec<_> = lapper
+      .find(start, start + Duration::hours(10))
+      .cloned()
+      .collect();
+    assert_eq!(found.len(), 4);
+    for i in 1..found.len() {
+      assert!(found[i - 1].start <= found[i].start);
+    }
+
+    // query overlapping [1.5h, 3.5h) should hit intervals at 1h, 2h, and 3h (they overlap)
+    let qstart = start + Duration::hours(1) + Duration::minutes(30);
+    let qstop = start + Duration::hours(3) + Duration::minutes(30);
+    let hits: Vec<_> = lapper.find(qstart, qstop).map(|iv| iv.val).collect();
+    assert!(hits.contains(&iv_b.val)); // 1h
+    assert!(hits.contains(&iv_d.val)); // 2h
+    assert!(hits.contains(&iv_c.val)); // 3h
+    assert!(!hits.contains(&iv_a.val));
   }
 
   #[test]
