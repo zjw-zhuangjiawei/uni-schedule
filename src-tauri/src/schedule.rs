@@ -606,7 +606,7 @@ mod lapper {
     ///
     /// Returns an `OverlapIter` that borrows the tree and yields
     /// `&Interval` references without allocating a `Vec`.
-    pub fn find(&self, start: DateTime<Utc>, stop: DateTime<Utc>) -> OverlapIter {
+    pub fn find(&self, start: DateTime<Utc>, stop: DateTime<Utc>) -> OverlapIter<'_> {
       // Return an iterator that traverses the BST in-order but prunes
       // entire subtrees whose `max` end-time is <= query `start`.
       // This yields only intervals that might overlap the query range
@@ -2155,10 +2155,15 @@ pub mod tauri_api {
   use once_cell::sync::Lazy;
   use std::sync::RwLock;
 
+  #[cfg(not(debug_assertions))]
   static MANAGER: Lazy<RwLock<ScheduleManager>> = Lazy::new(|| {
     let path = crate::option::default_storage_path();
     RwLock::new(ScheduleManager::new_from_storage(Some(path)))
   });
+
+  #[cfg(debug_assertions)]
+  static MANAGER: Lazy<RwLock<ScheduleManager>> =
+    Lazy::new(|| RwLock::new(ScheduleManager::new_from_storage(None))); // In memory for debugging
 
   #[derive(Serialize, Deserialize, Debug)]
   pub struct CreateSchedulePayload {
