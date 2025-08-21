@@ -45,6 +45,10 @@ export interface GanttTask {
   start: string | Date;
   end: string | Date;
   color?: string;
+  /** Optional hierarchical level; tasks with the same level are laid out in lane columns */
+  level?: number;
+  /** Optional explicit priority (higher means more important). If provided it can override duration ordering */
+  priority?: number;
 }
 
 export interface DateRange {
