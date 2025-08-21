@@ -25,15 +25,15 @@ pub const SCHEDULE_DB_FILE: &str = "schedules.db";
 /// Return the base application data directory path (platform aware).
 /// Fallback is current working directory if a standard location isn't available.
 pub fn app_data_dir() -> PathBuf {
-	// Prefer OS specific data dir: Linux/XDG, macOS, Windows.
-	dirs::data_dir()
-		.unwrap_or_else(|| PathBuf::from("."))
-		.join(APP_DIR_NAME)
+  // Prefer OS specific data dir: Linux/XDG, macOS, Windows.
+  dirs::data_dir()
+    .unwrap_or_else(|| PathBuf::from("."))
+    .join(APP_DIR_NAME)
 }
 
 /// Full path to the native_db schedule storage file.
 pub fn default_storage_file() -> PathBuf {
-	app_data_dir().join(SCHEDULE_DB_FILE)
+  app_data_dir().join(SCHEDULE_DB_FILE)
 }
 
 // Full-text search functionality disabled
@@ -45,18 +45,18 @@ pub fn default_storage_file() -> PathBuf {
 /// Convenience: path passed to `ScheduleManager::new_from_storage` (directory, not file).
 /// We give the parent directory so the manager / storage layer can decide structure.
 pub fn default_storage_path() -> PathBuf {
-	app_data_dir()
+  app_data_dir()
 }
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+  use super::*;
 
-	#[test]
-	fn paths_are_consistent() {
-		let base = app_data_dir();
-		assert!(default_storage_file().starts_with(&base));
-		// Full-text search functionality disabled
-		// assert!(default_tantivy_dir().starts_with(&base));
-	}
+  #[test]
+  fn paths_are_consistent() {
+    let base = app_data_dir();
+    assert!(default_storage_file().starts_with(&base));
+    // Full-text search functionality disabled
+    // assert!(default_tantivy_dir().starts_with(&base));
+  }
 }

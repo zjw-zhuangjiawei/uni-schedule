@@ -1,11 +1,5 @@
-import DayView from "./components/DayView";
-
 function App() {
-	return (
-		<main>
-			<DayView />
-		</main>
-	);
+  return <main></main>;
 }
 
 export default App;
