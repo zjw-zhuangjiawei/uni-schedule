@@ -2167,27 +2167,27 @@ pub mod tauri_api {
     pub level: ScheduleLevel,
     pub exclusive: bool,
     pub name: String,
-    // Persisted / wire format: use u128 for IDs (Uuid <-> u128 conversion at boundary)
-    pub parents: Vec<u128>,
+    // Wire format: use String (UUID) for IDs when communicating over IPC
+    pub parents: Vec<String>,
   }
 
   #[derive(Serialize, Deserialize, Debug)]
   pub struct ScheduleDto {
-    // Wire/persisted representation: u128
-    pub id: u128,
+    // Wire representation: String (UUID) for IPC/JSON
+    pub id: String,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
     pub level: ScheduleLevel,
     pub exclusive: bool,
     pub name: String,
-    pub parents: Vec<u128>,
-    pub children: Vec<u128>,
+    pub parents: Vec<String>,
+    pub children: Vec<String>,
   }
 
   impl From<(ScheduleId, Schedule)> for ScheduleDto {
     fn from((id, s): (ScheduleId, Schedule)) -> Self {
       Self {
-        id: id.as_u128(),
+        id: id.to_string(),
         start: s.start,
         end: s.end,
         level: s.level,
@@ -2200,7 +2200,7 @@ pub mod tauri_api {
   }
 
   #[tauri::command]
-  pub fn create_schedule(payload: CreateSchedulePayload) -> Result<u128, String> {
+  pub fn create_schedule(payload: CreateSchedulePayload) -> Result<String, String> {
     let sched = Schedule::new(
       payload.start,
       payload.end,
@@ -2209,48 +2209,52 @@ pub mod tauri_api {
       payload.name,
     );
     // Convert parents from wire u128 -> runtime Uuid (ScheduleId)
-    let parents: HashSet<ScheduleId> = payload
-      .parents
-      .into_iter()
-      .map(|p| ScheduleId::from_u128(p))
-      .collect();
+    let mut parents: HashSet<ScheduleId> = HashSet::new();
+    for p in payload.parents.into_iter() {
+      match ScheduleId::parse_str(&p) {
+        Ok(u) => {
+          parents.insert(u);
+        }
+        Err(e) => return Err(format!("invalid parent uuid '{}': {}", p, e)),
+      }
+    }
     let mut mgr = MANAGER.write().map_err(|e| e.to_string())?;
     mgr
       .create_schedule(sched, parents)
       .map_err(|e| e.to_string())
-      .map(|id| id.as_u128())
+      .map(|id| id.to_string())
   }
 
   #[tauri::command]
-  pub fn delete_schedule(id: u128) -> Result<(), String> {
+  pub fn delete_schedule(id: String) -> Result<(), String> {
     let mut mgr = MANAGER.write().map_err(|e| e.to_string())?;
-    let uuid = ScheduleId::from_u128(id);
+    let uuid = ScheduleId::parse_str(&id).map_err(|e| e.to_string())?;
     mgr.delete_schedule(uuid).map_err(|e| e.to_string())
   }
 
   #[tauri::command]
-  pub fn get_schedule(id: u128) -> Option<ScheduleDto> {
+  pub fn get_schedule(id: String) -> Option<ScheduleDto> {
     let mgr = MANAGER.read().ok()?;
-    let uuid = ScheduleId::from_u128(id);
+    let uuid = ScheduleId::parse_str(&id).ok()?;
     mgr.get_schedule(uuid).cloned().map(|s| {
-      let parents: Vec<u128> = mgr
+      let parents: Vec<String> = mgr
         .parent_relations
         .get(&uuid)
         .cloned()
         .unwrap_or_default()
         .into_iter()
-        .map(|sid| sid.as_u128())
+        .map(|sid| sid.to_string())
         .collect();
-      let children: Vec<u128> = mgr
+      let children: Vec<String> = mgr
         .child_relations
         .get(&uuid)
         .cloned()
         .unwrap_or_default()
         .into_iter()
-        .map(|sid| sid.as_u128())
+        .map(|sid| sid.to_string())
         .collect();
       ScheduleDto {
-        id: uuid.as_u128(),
+        id: uuid.to_string(),
         start: s.start,
         end: s.end,
         level: s.level,
@@ -2270,24 +2274,24 @@ pub mod tauri_api {
         .query_schedule(opts)
         .into_iter()
         .map(|(id, s)| {
-          let parents: Vec<u128> = mgr
+          let parents: Vec<String> = mgr
             .parent_relations
             .get(&id)
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .map(|sid| sid.as_u128())
+            .map(|sid| sid.to_string())
             .collect();
-          let children: Vec<u128> = mgr
+          let children: Vec<String> = mgr
             .child_relations
             .get(&id)
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .map(|sid| sid.as_u128())
+            .map(|sid| sid.to_string())
             .collect();
           ScheduleDto {
-            id: id.as_u128(),
+            id: id.to_string(),
             start: s.start,
             end: s.end,
             level: s.level,
