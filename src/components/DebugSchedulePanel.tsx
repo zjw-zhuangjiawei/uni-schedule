@@ -305,8 +305,8 @@ const Panel = styled.div`
   width: 420px;
   max-height: 100%;
   overflow: auto;
-  background: #1e1e23;
-  color: #f5f5f5;
+  background: ${(p) => p.theme.palette.surface};
+  color: ${(p) => p.theme.palette.textPrimary};
   font-family: system-ui, sans-serif;
   font-size: 14px;
   padding: 16px;
@@ -360,7 +360,7 @@ const Form = styled.form`
 `;
 
 const ParentSelection = styled.fieldset`
-  border: 1px solid #444;
+  border: 1px solid ${(p) => p.theme.palette.border};
   border-radius: 4px;
   padding: 8px;
 `;
@@ -414,7 +414,7 @@ const ScheduleItem = styled.div`
   display: flex;
   align-items: center;
   gap: 12px;
-  background: #282830;
+  background: ${(p) => p.theme.palette.surface};
   padding: 8px;
   border-radius: 4px;
 `;

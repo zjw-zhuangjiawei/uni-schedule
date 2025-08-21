@@ -1,76 +1,9 @@
 import React from "react";
-import styled from "@emotion/styled";
-import { COLORS } from "../../utils";
+import MUIButton from "@mui/material/Button";
 import type { ButtonProps } from "../../types";
 
-const StyledButton = styled.button<{
-  variant: ButtonProps["variant"];
-  size: ButtonProps["size"];
-}>`
-  padding: ${(props) => {
-    switch (props.size) {
-      case "small":
-        return "4px 8px";
-      case "large":
-        return "12px 24px";
-      default:
-        return "8px 16px";
-    }
-  }};
-
-  font-size: ${(props) => {
-    switch (props.size) {
-      case "small":
-        return "12px";
-      case "large":
-        return "16px";
-      default:
-        return "14px";
-    }
-  }};
-
-  background-color: ${(props) => {
-    switch (props.variant) {
-      case "primary":
-        return COLORS.primary;
-      case "danger":
-        return COLORS.danger;
-      case "secondary":
-      default:
-        return COLORS.secondary;
-    }
-  }};
-
-  color: ${(props) =>
-    props.variant === "secondary" ? COLORS.text.primary : "white"};
-  border: 1px solid
-    ${(props) => {
-      switch (props.variant) {
-        case "primary":
-          return COLORS.primary;
-        case "danger":
-          return COLORS.danger;
-        case "secondary":
-        default:
-          return COLORS.border.medium;
-      }
-    }};
-
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-
-  &:hover:not(:disabled) {
-    opacity: 0.9;
-    transform: translateY(-1px);
-  }
-
-  &:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-`;
-
+// This component is a thin wrapper around MUI Button.
+// English comments and strings are intentionally used inside the file.
 export const Button: React.FC<ButtonProps & { children: React.ReactNode }> = ({
   children,
   variant = "secondary",
@@ -81,10 +14,34 @@ export const Button: React.FC<ButtonProps & { children: React.ReactNode }> = ({
   className,
   style,
 }) => {
+  // Map project variants to MUI variants
+  const variantMap: Record<string, "contained" | "outlined" | "text"> = {
+    primary: "contained",
+    secondary: "outlined",
+    ghost: "text",
+  };
+
+  const muiVariant = variantMap[variant as string] || "outlined";
+
+  // Map sizes directly; default to 'medium' which is supported by MUI
+  const muiSize = (size as "small" | "medium" | "large") || "medium";
+
+  // Map project color variants to MUI color prop so theme palette is used
+  const colorMap: Record<string, "primary" | "inherit" | "error" | "success"> =
+    {
+      primary: "primary",
+      secondary: "inherit",
+      danger: "error",
+      ghost: "inherit",
+    };
+
+  const muiColor = colorMap[variant as string] || "inherit";
+
   return (
-    <StyledButton
-      variant={variant}
-      size={size}
+    <MUIButton
+      variant={muiVariant}
+      size={muiSize}
+      color={muiColor}
       disabled={disabled}
       type={type}
       onClick={onClick}
@@ -92,6 +49,6 @@ export const Button: React.FC<ButtonProps & { children: React.ReactNode }> = ({
       style={style}
     >
       {children}
-    </StyledButton>
+    </MUIButton>
   );
 };

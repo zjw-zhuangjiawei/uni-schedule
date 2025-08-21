@@ -12,9 +12,12 @@
     "test": "vitest",
     "test:coverage": "vitest run --coverage"
   },
+  "install": "bun install",
   "dependencies": {
     "@emotion/react": "11.14.0",
     "@emotion/styled": "11.14.1",
+    "@mui/material": "7.3.1",
+    "@mui/icons-material": "7.3.1",
     "@tauri-apps/api": "2.8.0",
     "@tauri-apps/plugin-opener": "2.5.0",
     "react": "19.1.1",
@@ -34,5 +37,8 @@
     "vitest": "2.1.4",
     "jsdom": "25.0.1",
     "msw": "2.6.6"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
   }
 }

@@ -2,13 +2,14 @@ import { useMemo } from "react";
 import VerticalGantt from "./components/VerticalGantt";
 import DebugSchedulePanel from "./components/DebugSchedulePanel";
 import { Button, LoadingSpinner, ErrorMessage } from "./components/ui";
-import { useSchedules, useToggle } from "./hooks";
+import { useSchedules, useToggle, useThemeMode } from "./hooks";
 import { generateScheduleColor } from "./utils";
 import type { GanttTask, DateRange } from "./types";
 
 function App() {
   const debugPanel = useToggle(false);
   const { schedules, isLoading, error, refreshSchedules } = useSchedules();
+  const themeMode = useThemeMode();
 
   // Convert schedules to Gantt tasks
   const tasks = useMemo(
@@ -57,21 +58,32 @@ function App() {
         <h1 style={{ margin: 0, fontSize: 24, fontWeight: 600 }}>
           University Schedule
         </h1>
-        <Button
-          variant="primary"
-          onClick={() => {
-            console.log("DebugPanel toggle before", debugPanel.value);
-            debugPanel.toggle();
-            // state updates are async; log shortly after to observe new value
-            setTimeout(
-              () =>
-                console.log("DebugPanel value after (async)", debugPanel.value),
-              0,
-            );
-          }}
-        >
-          {debugPanel.value ? "Hide" : "Show"} Debug Panel
-        </Button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Button
+            variant="secondary"
+            onClick={() => themeMode.toggle()}
+            style={{ minWidth: 120 }}
+          >
+            Theme: {themeMode.mode}
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => {
+              console.log("DebugPanel toggle before", debugPanel.value);
+              debugPanel.toggle();
+              setTimeout(
+                () =>
+                  console.log(
+                    "DebugPanel value after (async)",
+                    debugPanel.value,
+                  ),
+                0,
+              );
+            }}
+          >
+            {debugPanel.value ? "Hide" : "Show"} Debug Panel
+          </Button>
+        </div>
       </header>
 
       <p
