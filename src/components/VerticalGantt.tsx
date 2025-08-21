@@ -213,9 +213,18 @@ const VerticalGantt: React.FC<VerticalGanttProps> = ({
 
   return (
     <Wrapper>
-      <Inner style={{ gridTemplateColumns, gridAutoRows: `${rowHeight}px` }}>
-        {/* Header row: Date column */}
-        <HeaderLabel style={{ gridColumn: "1 / 2" }}>Date</HeaderLabel>
+      {/* We now use explicit gridTemplateRows instead of implicit auto placement to stabilize layout. */}
+      <Inner
+        style={{
+          gridTemplateColumns,
+          // First row = header (fixed to rowHeight for uniform alignment), followed by one row per day.
+          gridTemplateRows: `${rowHeight}px repeat(${totalDays}, ${rowHeight}px)`,
+        }}
+      >
+        {/* Header row: Date column (explicit row 1) */}
+        <HeaderLabel style={{ gridColumn: "1 / 2", gridRow: "1 / 2" }}>
+          Date
+        </HeaderLabel>
         {/* Lane headers per level */}
         {laneAssignments.map((la) => {
           const offset = levelColumnOffsets.get(la.level)!; // number of columns before this level
@@ -224,7 +233,10 @@ const VerticalGantt: React.FC<VerticalGanttProps> = ({
             return (
               <HeaderLabel
                 key={`hdr-${la.level}-${laneIdx}`}
-                style={{ gridColumn: `${colStart} / ${colStart + 1}` }}
+                style={{
+                  gridColumn: `${colStart} / ${colStart + 1}`,
+                  gridRow: "1 / 2",
+                }}
                 title={`Level ${la.level} Lane ${laneIdx}`}
               >
                 L{la.level}-L{laneIdx}
@@ -241,7 +253,14 @@ const VerticalGantt: React.FC<VerticalGanttProps> = ({
           const dateLabel = currentDate.toLocaleDateString();
           return (
             <React.Fragment key={`row-${dayIndex}`}>
-              <DateCell style={{ gridColumn: "1 / 2" }}>{dateLabel}</DateCell>
+              <DateCell
+                style={{
+                  gridColumn: "1 / 2",
+                  gridRow: `${dayIndex + 2} / ${dayIndex + 3}`,
+                }}
+              >
+                {dateLabel}
+              </DateCell>
               {laneAssignments.map((la) => {
                 const offset = levelColumnOffsets.get(la.level)!;
                 return la.lanes.map((_, laneIdx) => {
@@ -249,7 +268,10 @@ const VerticalGantt: React.FC<VerticalGanttProps> = ({
                   return (
                     <GridCell
                       key={`cell-${dayIndex}-${la.level}-${laneIdx}`}
-                      style={{ gridColumn: `${colStart} / ${colStart + 1}` }}
+                      style={{
+                        gridColumn: `${colStart} / ${colStart + 1}`,
+                        gridRow: `${dayIndex + 2} / ${dayIndex + 3}`,
+                      }}
                     />
                   );
                 });
@@ -265,8 +287,10 @@ const VerticalGantt: React.FC<VerticalGanttProps> = ({
             1,
             getDurationDays(new Date(task.start), new Date(task.end)),
           );
-          const top = startIdx * rowHeight;
-          const height = duration * rowHeight - 4; // small padding
+          // With explicit rows, header occupies the first row (height = rowHeight), so bars start below it.
+          const headerOffset = rowHeight; // first (header) row height
+          const top = headerOffset + startIdx * rowHeight; // absolute Y offset inside the spanning container
+          const height = duration * rowHeight - 4; // small vertical padding to visually separate stacked bars
           const levelOffset = levelColumnOffsets.get(level)!;
           const colStart = 2 + levelOffset + laneIndex; // date column is 1
           return (
@@ -280,7 +304,8 @@ const VerticalGantt: React.FC<VerticalGanttProps> = ({
               <Bar
                 title={`${task.title}: ${task.start.toString()} → ${task.end.toString()} (duration: ${duration}d)`}
                 style={{
-                  top: `${top + rowHeight + 2}px`,
+                  // +2px small inset to avoid touching the header baseline
+                  top: `${top + 2}px`,
                   height: `${height}px`,
                   backgroundColor: task.color || COLORS.primary,
                 }}
@@ -371,6 +396,9 @@ const Inner = styled.div`
 `;
 
 const HeaderLabel = styled.div`
+  /* Explicit header row placement & stacking context (bars are behind). */
+  position: relative;
+  z-index: 5;
   padding: 8px 10px;
   background: ${COLORS.background.secondary};
   border-bottom: 1px solid ${COLORS.border.light};
