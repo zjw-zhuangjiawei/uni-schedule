@@ -2167,34 +2167,40 @@ pub mod tauri_api {
     pub level: ScheduleLevel,
     pub exclusive: bool,
     pub name: String,
-    pub parents: Vec<ScheduleId>,
+    // Persisted / wire format: use u128 for IDs (Uuid <-> u128 conversion at boundary)
+    pub parents: Vec<u128>,
   }
 
   #[derive(Serialize, Deserialize, Debug)]
   pub struct ScheduleDto {
-    pub id: ScheduleId,
+    // Wire/persisted representation: u128
+    pub id: u128,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
     pub level: ScheduleLevel,
     pub exclusive: bool,
     pub name: String,
+    pub parents: Vec<u128>,
+    pub children: Vec<u128>,
   }
 
   impl From<(ScheduleId, Schedule)> for ScheduleDto {
     fn from((id, s): (ScheduleId, Schedule)) -> Self {
       Self {
-        id,
+        id: id.as_u128(),
         start: s.start,
         end: s.end,
         level: s.level,
         exclusive: s.exclusive,
         name: s.name,
+        parents: Vec::new(),
+        children: Vec::new(),
       }
     }
   }
 
   #[tauri::command]
-  pub fn create_schedule(payload: CreateSchedulePayload) -> Result<ScheduleId, String> {
+  pub fn create_schedule(payload: CreateSchedulePayload) -> Result<u128, String> {
     let sched = Schedule::new(
       payload.start,
       payload.end,
@@ -2202,23 +2208,58 @@ pub mod tauri_api {
       payload.exclusive,
       payload.name,
     );
-    let parents: HashSet<ScheduleId> = payload.parents.into_iter().collect();
+    // Convert parents from wire u128 -> runtime Uuid (ScheduleId)
+    let parents: HashSet<ScheduleId> = payload
+      .parents
+      .into_iter()
+      .map(|p| ScheduleId::from_u128(p))
+      .collect();
     let mut mgr = MANAGER.write().map_err(|e| e.to_string())?;
     mgr
       .create_schedule(sched, parents)
       .map_err(|e| e.to_string())
+      .map(|id| id.as_u128())
   }
 
   #[tauri::command]
-  pub fn delete_schedule(id: ScheduleId) -> Result<(), String> {
+  pub fn delete_schedule(id: u128) -> Result<(), String> {
     let mut mgr = MANAGER.write().map_err(|e| e.to_string())?;
-    mgr.delete_schedule(id).map_err(|e| e.to_string())
+    let uuid = ScheduleId::from_u128(id);
+    mgr.delete_schedule(uuid).map_err(|e| e.to_string())
   }
 
   #[tauri::command]
-  pub fn get_schedule(id: ScheduleId) -> Option<ScheduleDto> {
+  pub fn get_schedule(id: u128) -> Option<ScheduleDto> {
     let mgr = MANAGER.read().ok()?;
-    mgr.get_schedule(id).cloned().map(|s| (id, s).into())
+    let uuid = ScheduleId::from_u128(id);
+    mgr.get_schedule(uuid).cloned().map(|s| {
+      let parents: Vec<u128> = mgr
+        .parent_relations
+        .get(&uuid)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|sid| sid.as_u128())
+        .collect();
+      let children: Vec<u128> = mgr
+        .child_relations
+        .get(&uuid)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|sid| sid.as_u128())
+        .collect();
+      ScheduleDto {
+        id: uuid.as_u128(),
+        start: s.start,
+        end: s.end,
+        level: s.level,
+        exclusive: s.exclusive,
+        name: s.name,
+        parents,
+        children,
+      }
+    })
   }
 
   #[tauri::command]
@@ -2228,7 +2269,34 @@ pub mod tauri_api {
       mgr
         .query_schedule(opts)
         .into_iter()
-        .map(Into::into)
+        .map(|(id, s)| {
+          let parents: Vec<u128> = mgr
+            .parent_relations
+            .get(&id)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|sid| sid.as_u128())
+            .collect();
+          let children: Vec<u128> = mgr
+            .child_relations
+            .get(&id)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|sid| sid.as_u128())
+            .collect();
+          ScheduleDto {
+            id: id.as_u128(),
+            start: s.start,
+            end: s.end,
+            level: s.level,
+            exclusive: s.exclusive,
+            name: s.name,
+            parents,
+            children,
+          }
+        })
         .collect(),
     )
   }
@@ -2420,12 +2488,22 @@ impl ScheduleManager {
     let db_path = self.storage_path.as_ref().map(|p| p.join("schedules.db"));
     if let Ok(store) = storage::Storage::open_or_create(db_path) {
       let item = PersistSchedule {
-        id: schedule_id.to_string(),
+        id: schedule_id.as_u128(),
         start: schedule.start,
         end: schedule.end,
         level: schedule.level,
         exclusive: schedule.exclusive,
         name: schedule.name.clone(),
+        parents: self
+          .parent_relations
+          .get(&schedule_id)
+          .map(|s| s.iter().map(|id| id.as_u128()).collect())
+          .unwrap_or_default(),
+        children: self
+          .child_relations
+          .get(&schedule_id)
+          .map(|s| s.iter().map(|id| id.as_u128()).collect())
+          .unwrap_or_default(),
       };
       if let Err(e) = store.upsert(item) {
         return Err(ScheduleError::StorageError(format!(
@@ -2488,41 +2566,70 @@ impl ScheduleManager {
     if let Ok(store) = storage::Storage::open_or_create(db_path) {
       if let Ok(items) = store.load_all() {
         for it in items {
-          if let Ok(id) = Uuid::parse_str(&it.id) {
-            let sched = Schedule {
-              start: it.start,
-              end: it.end,
-              level: it.level,
-              exclusive: it.exclusive,
-              name: it.name,
-            };
+          let id: ScheduleId = Uuid::from_u128(it.id);
+          let sched = Schedule {
+            start: it.start,
+            end: it.end,
+            level: it.level,
+            exclusive: it.exclusive,
+            name: it.name,
+          };
 
-            // insert into in-memory structures
-            if sched.exclusive {
-              let lap = self
-                .exclusive_index
-                .entry(sched.level)
-                .or_insert_with(|| Lapper::new(std::collections::BTreeSet::new()));
-              lap.insert(Interval {
-                start: sched.start,
-                stop: sched.end,
-                val: id,
-              });
-            }
-
-            let lap_all = self
-              .all_index
+          // insert into in-memory structures
+          if sched.exclusive {
+            let lap = self
+              .exclusive_index
               .entry(sched.level)
               .or_insert_with(|| Lapper::new(std::collections::BTreeSet::new()));
-            lap_all.insert(Interval {
+            lap.insert(Interval {
               start: sched.start,
               stop: sched.end,
               val: id,
             });
+          }
 
-            self.level_index.entry(sched.level).or_default().insert(id);
-            self.schedules.insert(id, sched);
-            // parent/child relations are not persisted currently
+          let lap_all = self
+            .all_index
+            .entry(sched.level)
+            .or_insert_with(|| Lapper::new(std::collections::BTreeSet::new()));
+          lap_all.insert(Interval {
+            start: sched.start,
+            stop: sched.end,
+            val: id,
+          });
+
+          self.level_index.entry(sched.level).or_default().insert(id);
+          self.schedules.insert(id, sched);
+          // reconstruct parent/child relations from persisted u128 vectors
+          if !it.parents.is_empty() {
+            let pset: HashSet<ScheduleId> = it
+              .parents
+              .iter()
+              .cloned()
+              .map(|v| Uuid::from_u128(v))
+              .collect();
+            self.parent_relations.insert(id, pset.clone());
+            for p in it.parents.iter().cloned() {
+              let pu = Uuid::from_u128(p);
+              self.child_relations.entry(pu).or_default().insert(id);
+            }
+          }
+          if !it.children.is_empty() {
+            let cset: HashSet<ScheduleId> = it
+              .children
+              .iter()
+              .cloned()
+              .map(|v| Uuid::from_u128(v))
+              .collect();
+            self
+              .child_relations
+              .entry(id)
+              .or_default()
+              .extend(cset.iter().cloned());
+            for c in it.children.iter().cloned() {
+              let cu = Uuid::from_u128(c);
+              self.parent_relations.entry(cu).or_default().insert(id);
+            }
           }
         }
       }
@@ -2773,12 +2880,14 @@ impl ScheduleManager {
     let db_path = self.storage_path.as_ref().map(|p| p.join("schedules.db"));
     if let Ok(store) = storage::Storage::open_or_create(db_path) {
       let item = PersistSchedule {
-        id: schedule_id.to_string(),
+        id: schedule_id.as_u128(),
         start: schedule.start,
         end: schedule.end,
         level: schedule.level,
         exclusive: schedule.exclusive,
         name: schedule.name.clone(),
+        parents: Vec::new(),
+        children: Vec::new(),
       };
       let _ = store.remove(item);
     }

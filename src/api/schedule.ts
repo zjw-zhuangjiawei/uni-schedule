@@ -205,6 +205,8 @@ class InMemoryScheduleManager {
       level: s.level,
       exclusive: s.exclusive,
       name: s.name,
+      parents: Array.from(s.parents),
+      children: Array.from(s.children),
     };
   }
 }

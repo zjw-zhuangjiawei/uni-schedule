@@ -6,6 +6,8 @@ export interface Schedule {
   end: string; // ISO 8601 format
   level: number;
   exclusive: boolean;
+  parents?: string[];
+  children?: string[];
 }
 
 export interface CreateSchedulePayload {

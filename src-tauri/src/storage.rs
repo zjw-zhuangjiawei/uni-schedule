@@ -21,12 +21,15 @@ pub mod data {
     #[native_db]
     pub struct ScheduleModel {
       #[primary_key]
-      pub id: String,
+      pub id: u128,
       pub start: chrono::DateTime<chrono::Utc>,
       pub end: chrono::DateTime<chrono::Utc>,
       pub level: u32,
       pub exclusive: bool,
       pub name: String,
+      // Persist parent and child relationships as vectors of UUIDs
+      pub parents: Vec<u128>,
+      pub children: Vec<u128>,
     }
   }
 }
