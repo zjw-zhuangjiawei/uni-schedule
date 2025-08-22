@@ -4,13 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
-    "tauri": "tauri",
-    "format": "prettier --write \"src/**/*.{ts,tsx}\"",
-    "test": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "dev:frontend": "cd uni-schedule-frontend && bunx vite",
+    "dev:tauri": "bunx tauri dev"
   },
   "install": "bun install",
   "dependencies": {

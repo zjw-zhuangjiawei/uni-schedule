@@ -7,7 +7,7 @@ import react from "@vitejs/plugin-react";
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
-export default defineConfig(async () => ({
+export default defineConfig(() => ({
   plugins: [react()],
   clearScreen: false,
   server: {
@@ -22,8 +22,8 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. tell Vite to ignore watching backend/tauri sources after refactor
+      ignored: ["**/uni-schedule-backend/**", "**/src-tauri/**"],
     },
   },
   // Vitest configuration
@@ -40,7 +40,7 @@ export default defineConfig(async () => ({
       },
     },
     coverage: {
-      provider: "v8",
+      provider: "v8" as const,
       reporter: ["text", "lcov"],
       exclude: ["src/**/mocks/**"],
     },
