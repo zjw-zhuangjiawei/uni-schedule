@@ -1,0 +1,6 @@
+[package]
+name = "uni-schedule-core"
+version = "0.1.0"
+description = "Core functionality for the Uni Schedule application"
+authors = ["Zhuang Jiawei"]
+edition = "2024"
