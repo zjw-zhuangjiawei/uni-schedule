@@ -4328,7 +4328,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "uni-schedule"
+name = "uni-schedule-backend"
 version = "0.1.0"
 dependencies = [
  "chrono",
@@ -4340,6 +4340,18 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
+ "thiserror 2.0.16",
+ "typed-builder",
+ "uni-schedule-core",
+ "uuid",
+]
+
+[[package]]
+name = "uni-schedule-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
  "thiserror 2.0.16",
  "typed-builder",
  "uuid",

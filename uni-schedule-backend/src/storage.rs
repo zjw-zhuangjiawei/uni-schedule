@@ -44,12 +44,14 @@ static MODELS: Lazy<Models> = Lazy::new(|| {
   m
 });
 
-pub struct Storage<'a> {
-  pub db: Database<'a>,
+pub struct Storage {
+  pub db: Database<'static>,
 }
 
-impl<'a> Storage<'a> {
-  pub fn open_or_create(path: Option<PathBuf>) -> Result<Storage<'a>> {
+impl Storage {
+  /// Open or create a storage instance. If `path` is Some, an on-disk DB is used;
+  /// otherwise an in-memory DB is created.
+  pub fn open_or_create(path: Option<PathBuf>) -> Result<Storage> {
     if let Some(p) = path {
       std::fs::create_dir_all(p.parent().unwrap_or(&std::path::PathBuf::from(".")))?;
       let db = Builder::new().create(&*MODELS, p)?;
@@ -60,7 +62,7 @@ impl<'a> Storage<'a> {
     }
   }
 
-  pub fn load_all(&'a self) -> Result<Vec<data::ScheduleModel>> {
+  pub fn load_all(&self) -> Result<Vec<data::ScheduleModel>> {
     let r = self.db.r_transaction()?;
     let mut out: Vec<data::ScheduleModel> = Vec::new();
     let scan = r.scan();
@@ -72,17 +74,39 @@ impl<'a> Storage<'a> {
     Ok(out)
   }
 
-  pub fn upsert(&'a self, item: data::ScheduleModel) -> Result<()> {
+  pub fn upsert(&self, item: data::ScheduleModel) -> Result<()> {
     let rw = self.db.rw_transaction()?;
     rw.upsert(item)?;
     rw.commit()?;
     Ok(())
   }
 
-  pub fn remove(&'a self, item: data::ScheduleModel) -> Result<()> {
+  pub fn remove(&self, item: data::ScheduleModel) -> Result<()> {
     let rw = self.db.rw_transaction()?;
     rw.remove(item)?;
     rw.commit()?;
     Ok(())
+  }
+}
+
+/// Backend-local persistence abstraction kept inside the backend crate.
+pub trait Persistence: Send + Sync {
+  fn load_all(&self) -> Result<Vec<data::ScheduleModel>>;
+  fn upsert(&self, item: data::ScheduleModel) -> Result<()>;
+  fn remove(&self, item: data::ScheduleModel) -> Result<()>;
+}
+
+impl Persistence for Storage {
+  fn load_all(&self) -> Result<Vec<data::ScheduleModel>> {
+    // Call the inherent method to avoid recursive dispatch
+    Storage::load_all(self)
+  }
+
+  fn upsert(&self, item: data::ScheduleModel) -> Result<()> {
+    Storage::upsert(self, item)
+  }
+
+  fn remove(&self, item: data::ScheduleModel) -> Result<()> {
+    Storage::remove(self, item)
   }
 }

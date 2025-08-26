@@ -4,3 +4,10 @@ version = "0.1.0"
 description = "Core functionality for the Uni Schedule application"
 authors = ["Zhuang Jiawei"]
 edition = "2024"
+
+[dependencies]
+chrono = { workspace = true }
+serde = { workspace = true }
+thiserror = "2.0.16"
+typed-builder = "0.21.2"
+uuid = { workspace = true }
