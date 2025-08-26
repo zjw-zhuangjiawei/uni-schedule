@@ -245,16 +245,36 @@ impl ScheduleManager {
   fn load_from_storage(&mut self) {
     if let Some(store) = &self.storage {
       if let Ok(items) = store.load_all() {
+        // First pass: create schedules with preserved IDs but without parents.
+        // This ensures schedules exist even if parents reference them later.
+        for it in &items {
+          let id: ScheduleId = it.id;
+          let sched = Schedule::new(it.start, it.end, it.level, it.exclusive, it.name.clone());
+
+          if let Err(e) = self
+            .core_manager
+            .create_schedule_with_id(id, sched, HashSet::new())
+          {
+            eprintln!(
+              "Warning: Failed to create schedule with id {} from storage: {}",
+              id, e
+            );
+          }
+        }
+
+        // Second pass: attach parent relations for each schedule.
         for it in items {
-          let _id: ScheduleId = it.id;
-          let sched = Schedule::new(it.start, it.end, it.level, it.exclusive, it.name);
+          let id: ScheduleId = it.id;
+          let parents: HashSet<ScheduleId> = it.parents.into_iter().collect();
+          if parents.is_empty() {
+            continue;
+          }
 
-          // Reconstruct parent/child relations
-          let parents: HashSet<ScheduleId> = it.parents.iter().cloned().collect();
-
-          // Use the core manager to add the schedule
-          if let Err(e) = self.core_manager.create_schedule(sched, parents) {
-            eprintln!("Warning: Failed to load schedule from storage: {}", e);
+          if let Err(e) = self.core_manager.add_parents(id, parents) {
+            eprintln!(
+              "Warning: Failed to attach parents for schedule {}: {}",
+              id, e
+            );
           }
         }
       }

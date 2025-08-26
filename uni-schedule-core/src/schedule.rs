@@ -1352,6 +1352,67 @@ impl ScheduleManager {
 
     Ok(schedule_id)
   }
+
+  /// Create a schedule using an explicit, caller-provided ID.
+  ///
+  /// This preserves IDs when loading from an external store. The provided
+  /// `schedule_id` must not already exist in the manager. Validation is run
+  /// against the supplied `parents` (so parents must already be present).
+  pub fn create_schedule_with_id(
+    &mut self,
+    schedule_id: ScheduleId,
+    schedule: Schedule,
+    parents: HashSet<ScheduleId>,
+  ) -> Result<ScheduleId, ScheduleError> {
+    // ensure id is not already present
+    if self.schedules.contains_key(&schedule_id) {
+      return Err(ScheduleError::DuplicateId);
+    }
+
+    // Validate against parents (parents must exist)
+    self.validate_schedule(&schedule, &parents)?;
+
+    // Execute creation using the provided id
+    self.execute_create_transaction(schedule_id, schedule, parents)?;
+    Ok(schedule_id)
+  }
+
+  /// Attach parent relationships to an existing schedule.
+  ///
+  /// Validates the constraints of the schedule against the provided parents
+  /// and updates parent/child relation maps. Parents must already exist.
+  pub fn add_parents(
+    &mut self,
+    schedule_id: ScheduleId,
+    parents: HashSet<ScheduleId>,
+  ) -> Result<(), ScheduleError> {
+    // Ensure schedule exists
+    let schedule = self
+      .schedules
+      .get(&schedule_id)
+      .ok_or(ScheduleError::ScheduleNotFound)?
+      .clone();
+
+    // Validate constraints against the parents
+    self.validate_schedule(&schedule, &parents)?;
+
+    // Update child relations and parent_relations map
+    for parent in &parents {
+      self
+        .child_relations
+        .entry(*parent)
+        .or_default()
+        .insert(schedule_id);
+    }
+    // Merge with any existing parents for this schedule
+    self
+      .parent_relations
+      .entry(schedule_id)
+      .and_modify(|p| p.extend(parents.iter().copied()))
+      .or_insert(parents);
+
+    Ok(())
+  }
   pub fn delete_schedule(&mut self, schedule_id: ScheduleId) -> Result<(), ScheduleError> {
     // Get the schedule first to validate it exists
     let schedule = self
