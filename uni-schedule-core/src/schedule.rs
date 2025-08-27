@@ -1073,8 +1073,8 @@ impl ScheduleManager {
     schedule: &Schedule,
     parents: &HashSet<ScheduleId>,
   ) -> Result<(), ScheduleError> {
-    // Validate schedule time range
-    if schedule.start > schedule.end {
+    // Validate schedule time range: require start < end (disallow zero-length)
+    if schedule.start >= schedule.end {
       return Err(ScheduleError::StartAfterEnd);
     }
 
@@ -1093,12 +1093,14 @@ impl ScheduleManager {
       }
     }
 
-    // Check for overlaps with exclusive schedules at higher levels
-    for level in (0..=schedule.level).rev() {
-      if let Some(lapper) = self.exclusive_index.get(&level) {
-        if lapper.has_overlap(schedule.start, schedule.end) {
-          return Err(ScheduleError::TimeRangeOverlaps);
-        }
+    // Check for overlaps with exclusive schedules at parent or same level.
+    // Note: lower numeric values indicate higher-level (parent) schedules,
+    // so we iterate existing exclusive index keys with numeric value <=
+    // `schedule.level`. This prevents same-level exclusive peers from
+    // overlapping a non-exclusive schedule.
+    for (&level, lapper) in self.exclusive_index.range(..=schedule.level).rev() {
+      if lapper.has_overlap(schedule.start, schedule.end) {
+        return Err(ScheduleError::TimeRangeOverlaps);
       }
     }
 
