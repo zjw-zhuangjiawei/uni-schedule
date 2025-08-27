@@ -247,13 +247,12 @@ impl ScheduleManager {
       if let Ok(items) = store.load_all() {
         // First pass: create schedules with preserved IDs but without parents.
         // This ensures schedules exist even if parents reference them later.
-        for it in &items {
-          let id: ScheduleId = it.id;
+        for (id, it) in &items {
           let sched = Schedule::new(it.start, it.end, it.level, it.exclusive, it.name.clone());
 
           if let Err(e) = self
             .core_manager
-            .create_schedule_with_id(id, sched, HashSet::new())
+            .create_schedule_with_id(*id, sched, HashSet::new())
           {
             eprintln!(
               "Warning: Failed to create schedule with id {} from storage: {}",
@@ -263,8 +262,7 @@ impl ScheduleManager {
         }
 
         // Second pass: attach parent relations for each schedule.
-        for it in items {
-          let id: ScheduleId = it.id;
+        for (id, it) in items {
           let parents: HashSet<ScheduleId> = it.parents.into_iter().collect();
           if parents.is_empty() {
             continue;
@@ -295,18 +293,16 @@ impl ScheduleManager {
 
     // Persist to storage if available
     if let Some(store) = &self.storage {
-      let item = PersistSchedule {
-        key: schedule_id.as_bytes().to_vec(),
-        id: schedule_id,
+      let model = PersistSchedule {
         start: schedule.start(),
         end: schedule.end(),
         level: schedule.level(),
         exclusive: schedule.exclusive(),
         name: schedule.name().to_string(),
         parents: parents.iter().copied().collect(),
-        children: Vec::new(), // Children will be updated when relationships are established
+        children: Vec::new(),
       };
-      if let Err(e) = store.upsert(item) {
+      if let Err(e) = store.upsert(schedule_id, model) {
         return Err(BackendScheduleError::StorageError(format!(
           "failed to persist: {e}"
         )));
@@ -318,26 +314,17 @@ impl ScheduleManager {
 
   /// Deletes a schedule from the manager and persistent storage.
   pub fn delete_schedule(&mut self, schedule_id: ScheduleId) -> Result<(), BackendScheduleError> {
-    // Use core manager for in-memory deletion
-    self
+    // Core manager now returns the set of removed ids (including cascaded children).
+    let removed = self
       .core_manager
       .delete_schedule(schedule_id)
       .map_err(BackendScheduleError::CoreError)?;
 
-    // Remove from storage if available
+    // Remove corresponding persisted records so storage matches in-memory state.
     if let Some(store) = &self.storage {
-      let item = PersistSchedule {
-        key: schedule_id.as_bytes().to_vec(),
-        id: schedule_id,
-        start: DateTime::<Utc>::MIN_UTC,
-        end: DateTime::<Utc>::MIN_UTC,
-        level: 0,
-        exclusive: false,
-        name: String::new(),
-        parents: Vec::new(),
-        children: Vec::new(),
-      };
-      let _ = store.remove(item);
+      for id in removed.into_iter() {
+        let _ = store.remove(id);
+      }
     }
 
     Ok(())

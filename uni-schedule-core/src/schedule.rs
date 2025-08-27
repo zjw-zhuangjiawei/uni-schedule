@@ -1413,7 +1413,10 @@ impl ScheduleManager {
 
     Ok(())
   }
-  pub fn delete_schedule(&mut self, schedule_id: ScheduleId) -> Result<(), ScheduleError> {
+  pub fn delete_schedule(
+    &mut self,
+    schedule_id: ScheduleId,
+  ) -> Result<std::collections::HashSet<ScheduleId>, ScheduleError> {
     // Get the schedule first to validate it exists
     let schedule = self
       .schedules
@@ -1459,7 +1462,11 @@ impl ScheduleManager {
       val: schedule_id,
     });
 
-    // Handle cascade deletion of children
+    // Aggregate set of removed ids including this schedule and any
+    // recursively deleted children. We remove `schedule_id`'s child
+    // entry first then walk children, delegating deletion to the
+    // recursive call which itself returns the set of ids it removed.
+    let mut removed: std::collections::HashSet<ScheduleId> = std::collections::HashSet::new();
     if let Some(children) = self.child_relations.remove(&schedule_id) {
       for child in children {
         // Remove this schedule from the child's parent set
@@ -1467,7 +1474,8 @@ impl ScheduleManager {
           parents.remove(&schedule_id);
           // If child has no remaining parents, cascade delete it
           if parents.is_empty() {
-            self.delete_schedule(child)?;
+            let child_removed = self.delete_schedule(child)?;
+            removed.extend(child_removed.into_iter());
           }
         }
       }
@@ -1487,12 +1495,15 @@ impl ScheduleManager {
     // Remove from schedules map (in-memory)
     self.schedules.remove(&schedule_id);
 
+    // include this id in the returned set
+    removed.insert(schedule_id);
+
     // Update full-text index - disabled
     // self.ft_delete_schedule(schedule_id);
 
     // Storage integration removed from uni-schedule-core: no persistent removal here.
 
-    Ok(())
+    Ok(removed)
   }
 
   pub fn get_schedule(&self, schedule_id: ScheduleId) -> Option<&Schedule> {
