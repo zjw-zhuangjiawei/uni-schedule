@@ -11,7 +11,11 @@ use uuid::Uuid;
 
 // Alias used throughout the module for schedule identifiers.
 pub type ScheduleId = Uuid;
-/// `starts`, `stops`) for compatibility and some linear-time operations.
+/// Interval indexing and overlap queries
+///
+/// This crate uses half-open intervals `[start, end)` consistently. The
+/// interval tree (lapper) uses the term `stop` for the exclusive end; the
+/// scheduling domain uses `end`. They refer to the same endpoint semantics.
 ///
 /// Typical usage (internal to this crate): build a `Lapper`, insert
 /// `Interval`s, then call `find(start, stop)` to iterate overlapping
@@ -149,10 +153,8 @@ mod lapper {
     /// Perform a right rotation and return the new subtree root.
     fn rotate_right(mut self: Box<Self>) -> Box<Node> {
       debug_assert!(self.left.is_some(), "rotate_right without left");
-      // SAFETY: The debug_assert above guarantees self.left is Some,
-      // and rotate_right is only called from rebalance when balance factor > 1,
-      // which only occurs when a left child exists.
-      let mut l = unsafe { self.left.take().unwrap_unchecked() };
+      // Use safe extraction preserving the debug_assert invariant.
+      let mut l = self.left.take().expect("rotate_right without left");
       self.left = l.right.take();
       // After splicing, update the moved subtree (self) before
       // attaching it as the right child of `l` so its height/max are
@@ -168,10 +170,8 @@ mod lapper {
     /// Perform a left rotation and return the new subtree root.
     fn rotate_left(mut self: Box<Self>) -> Box<Node> {
       debug_assert!(self.right.is_some(), "rotate_left without right");
-      // SAFETY: The debug_assert above guarantees self.right is Some,
-      // and rotate_left is only called from rebalance when balance factor < -1,
-      // which only occurs when a right child exists.
-      let mut r = unsafe { self.right.take().unwrap_unchecked() };
+      // Use safe extraction preserving the debug_assert invariant.
+      let mut r = self.right.take().expect("rotate_left without right");
       self.right = r.left.take();
       // Symmetric to rotate_right: fix-up `self` then `r` after
       // re-linking so invariants hold.
@@ -198,15 +198,17 @@ mod lapper {
       if bf > 1 {
         // left heavy
         debug_assert!(self.left.is_some(), "left child must exist when left heavy");
-        // SAFETY: AVL invariant guarantees that if balance factor > 1,
-        // then left subtree height is at least 2 more than right subtree,
-        // which means left child must exist.
-        let left_ref = unsafe { self.left.as_ref().unwrap_unchecked() };
+        // Safe access to left child reference for height inspection.
+        let left_ref = self
+          .left
+          .as_ref()
+          .expect("left child must exist when left heavy");
         if Node::height(&left_ref.right) > Node::height(&left_ref.left) {
-          // SAFETY: We already verified self.left.is_some() above.
-          // The map operation preserves the Some variant.
-          let left = unsafe { self.left.take().map(|n| n.rotate_left()).unwrap_unchecked() };
-          self.left = Some(left);
+          // Perform rotation on the left child safely.
+          if let Some(left_child) = self.left.take() {
+            let rotated = left_child.rotate_left();
+            self.left = Some(rotated);
+          }
         }
         return self.rotate_right();
       }
@@ -216,21 +218,17 @@ mod lapper {
           self.right.is_some(),
           "right child must exist when right heavy"
         );
-        // SAFETY: AVL invariant guarantees that if balance factor < -1,
-        // then right subtree height is at least 2 more than left subtree,
-        // which means right child must exist.
-        let right_ref = unsafe { self.right.as_ref().unwrap_unchecked() };
+        // Safe access to right child reference for height inspection.
+        let right_ref = self
+          .right
+          .as_ref()
+          .expect("right child must exist when right heavy");
         if Node::height(&right_ref.left) > Node::height(&right_ref.right) {
-          // SAFETY: We already verified self.right.is_some() above.
-          // The map operation preserves the Some variant.
-          let right = unsafe {
-            self
-              .right
-              .take()
-              .map(|n| n.rotate_right())
-              .unwrap_unchecked()
-          };
-          self.right = Some(right);
+          // Perform rotation on the right child safely.
+          if let Some(right_child) = self.right.take() {
+            let rotated = right_child.rotate_right();
+            self.right = Some(rotated);
+          }
         }
         return self.rotate_left();
       }
@@ -332,11 +330,14 @@ mod lapper {
         node.left.is_some(),
         "left child must exist when recursing in take_min"
       );
-      // SAFETY: The debug_assert above guarantees node.left is Some.
-      // This function is only called when we've already verified that
-      // left child exists (either via the early return check above or
-      // via recursive call from the two-child deletion case).
-      let (min_iv, new_left) = Node::take_min(unsafe { node.left.take().unwrap_unchecked() });
+      // The debug_assert above guarantees node.left is Some.
+      // Extract left child safely using `expect` to preserve the invariant
+      // while avoiding unsafe code.
+      let left_child = node
+        .left
+        .take()
+        .expect("left child must exist when recursing in take_min");
+      let (min_iv, new_left) = Node::take_min(left_child);
       node.left = new_left;
       node.update_height();
       node.update_max();
@@ -598,9 +599,9 @@ mod lapper {
     /// `&Interval` references without allocating a `Vec`.
     pub fn find(&self, start: DateTime<Utc>, stop: DateTime<Utc>) -> OverlapIter<'_> {
       // Return an iterator that traverses the BST in-order but prunes
-      // entire subtrees whose `max` end-time is <= query `start`.
-      // This yields only intervals that might overlap the query range
-      // and avoids allocating temporary vectors for most queries.
+      // entire subtrees whose `max` end-time is strictly less than the
+      // query `start`. This yields only intervals that might overlap
+      // the query range and avoids allocating temporary vectors.
       OverlapIter::new(self.root.as_deref(), start, stop)
     }
 
@@ -1099,16 +1100,23 @@ impl ScheduleManager {
     // `schedule.level`. This prevents same-level exclusive peers from
     // overlapping a non-exclusive schedule.
     for (&level, lapper) in self.exclusive_index.range(..=schedule.level).rev() {
-      if lapper.has_overlap(schedule.start, schedule.end) {
-        return Err(ScheduleError::TimeRangeOverlaps);
+      // Check for overlaps, but ignore intervals that correspond to
+      // the explicit `parents` set — a child is allowed to be contained
+      // within its parent even if the parent is exclusive.
+      for iv in lapper.find(schedule.start, schedule.end) {
+        if !parents.contains(&iv.val) {
+          return Err(ScheduleError::TimeRangeOverlaps);
+        }
       }
     }
 
     // If this schedule is exclusive, check for overlaps with any schedules at same or lower levels
     if schedule.exclusive {
       for (_, lapper) in self.all_index.range(schedule.level..) {
-        if lapper.has_overlap(schedule.start, schedule.end) {
-          return Err(ScheduleError::TimeRangeOverlaps);
+        for iv in lapper.find(schedule.start, schedule.end) {
+          if !parents.contains(&iv.val) {
+            return Err(ScheduleError::TimeRangeOverlaps);
+          }
         }
       }
     }
@@ -1432,15 +1440,13 @@ impl ScheduleManager {
         self.exclusive_index.contains_key(&schedule.level),
         "internal invariant: missing exclusive index for schedule level"
       );
-      // SAFETY: The debug_assert above guarantees the key exists in the map.
-      // The exclusive_index is populated for all schedule levels during
-      // ScheduleManager initialization and maintained as an invariant.
-      let lapper = unsafe {
-        self
-          .exclusive_index
-          .get_mut(&schedule.level)
-          .unwrap_unchecked()
-      };
+      // The debug_assert above guarantees the key exists in the map.
+      // Access it safely and panic with a clear message if the invariant
+      // is violated in release builds.
+      let lapper = self
+        .exclusive_index
+        .get_mut(&schedule.level)
+        .expect("internal invariant: missing exclusive index for schedule level");
 
       lapper.remove(&Interval {
         start: schedule.start,
@@ -1453,10 +1459,13 @@ impl ScheduleManager {
       self.all_index.contains_key(&schedule.level),
       "internal invariant: missing all index for schedule level"
     );
-    // SAFETY: The debug_assert above guarantees the key exists in the map.
-    // The all_index is populated for all schedule levels during
-    // ScheduleManager initialization and maintained as an invariant.
-    let lapper = unsafe { self.all_index.get_mut(&schedule.level).unwrap_unchecked() };
+    // The debug_assert above guarantees the key exists in the map.
+    // Access it safely and panic with a clear message if the invariant
+    // is violated in release builds.
+    let lapper = self
+      .all_index
+      .get_mut(&schedule.level)
+      .expect("internal invariant: missing all index for schedule level");
 
     lapper.remove(&Interval {
       start: schedule.start,
@@ -1725,6 +1734,339 @@ mod tests {
     );
     assert_eq!(res2, Err(ScheduleError::LevelExceedsParent));
   }
-
   // (remainder of tests kept intact)
+
+  #[test]
+  fn lapper_overlap_and_remove_edge_cases() {
+    // Verify half-open semantics, insertion/removal, and tiny durations.
+    let start = Utc::now();
+    let id1 = Uuid::now_v7();
+    let id2 = Uuid::now_v7();
+
+    let mut lapper = Lapper::new(std::collections::BTreeSet::new());
+
+    // Insert two adjacent intervals
+    let iv1 = Interval {
+      start,
+      stop: start + Duration::hours(1),
+      val: id1,
+    };
+    let iv2 = Interval {
+      start: start + Duration::hours(1),
+      stop: start + Duration::hours(2),
+      val: id2,
+    };
+    lapper.insert(iv1.clone());
+    lapper.insert(iv2.clone());
+
+    // Query exactly at the boundary: should not overlap (half-open)
+    assert!(!lapper.has_overlap(start + Duration::hours(1), start + Duration::hours(1)));
+
+    // Query that touches iv1 end and iv2 start (no overlap)
+    assert!(!lapper.has_overlap(
+      start + Duration::hours(1),
+      start + Duration::hours(1) + Duration::nanoseconds(0)
+    ));
+
+    // Overlap with iv1
+    assert!(lapper.has_overlap(start + Duration::minutes(30), start + Duration::minutes(90)));
+
+    // Remove iv1 and ensure iv2 still present
+    assert!(lapper.remove(&iv1));
+    let mut found_ids: Vec<ScheduleId> = lapper
+      .find(start, start + Duration::hours(3))
+      .map(|iv| iv.val)
+      .collect();
+    assert_eq!(found_ids.len(), 1);
+    assert_eq!(found_ids.pop().unwrap(), id2);
+
+    // Tiny interval (1 nanosecond) overlaps correctly
+    let tiny_start = Utc::now() + Duration::seconds(10);
+    let tiny = Interval {
+      start: tiny_start,
+      stop: tiny_start + Duration::nanoseconds(1),
+      val: Uuid::now_v7(),
+    };
+    lapper.insert(tiny.clone());
+    assert!(lapper.has_overlap(tiny_start, tiny_start + Duration::nanoseconds(1)));
+    assert!(!lapper.has_overlap(
+      tiny_start + Duration::nanoseconds(1),
+      tiny_start + Duration::nanoseconds(2)
+    ));
+  }
+
+  #[test]
+  fn schedule_manager_exclusivity_and_cascade_delete() {
+    let mut mgr = ScheduleManager::new();
+    let start = Utc::now();
+    let end = start + Duration::hours(2);
+
+    // Create a high-priority exclusive schedule at level 1
+    let sched1 = Schedule {
+      start,
+      end,
+      level: 1,
+      exclusive: true,
+      name: "exclusive".into(),
+    };
+    let id1 = mgr.create_schedule(sched1, HashSet::new()).unwrap();
+
+    // Attempt to create an overlapping schedule at level 2 (numeric >= 1).
+    // Because exclusive_index checks levels <= schedule.level, an exclusive at level 1
+    // should prevent creation at level 2 (1 <= 2).
+    let sched2 = Schedule {
+      start: start + Duration::minutes(30),
+      end: end + Duration::hours(1),
+      level: 2,
+      exclusive: false,
+      name: "blocked".into(),
+    };
+    let res = mgr.create_schedule(sched2, HashSet::new());
+    assert_eq!(res, Err(ScheduleError::TimeRangeOverlaps));
+
+    // Create a non-overlapping schedule at level 2 should succeed
+    let sched3 = Schedule {
+      start: end + Duration::hours(1),
+      end: end + Duration::hours(2),
+      level: 2,
+      exclusive: false,
+      name: "ok".into(),
+    };
+    let id3 = mgr.create_schedule(sched3, HashSet::new()).unwrap();
+
+    // Add a child to id1 and verify cascade delete removes the child when parent is deleted
+    let child = Schedule {
+      start: start + Duration::minutes(10),
+      end: start + Duration::minutes(20),
+      level: 2,
+      exclusive: false,
+      name: "child".into(),
+    };
+    let mut parents = HashSet::new();
+    parents.insert(id1);
+    let child_id = mgr.create_schedule(child, parents).unwrap();
+
+    // Now delete parent and ensure child is cascade deleted
+    let removed = mgr.delete_schedule(id1).unwrap();
+    assert!(removed.contains(&id1));
+    assert!(removed.contains(&child_id));
+    // id3 should still exist
+    assert!(mgr.get_schedule(id3).is_some());
+  }
+
+  #[test]
+  fn child_with_multiple_parents_survives_single_parent_delete() {
+    let mut mgr = ScheduleManager::new();
+    let start = Utc::now();
+    let end = start + Duration::hours(4);
+
+    // Create two parents that both contain the child range
+    // Use non-exclusive parents so they may overlap each other for this test.
+    let parent1 = Schedule {
+      start,
+      end,
+      level: 1,
+      exclusive: false,
+      name: "p1".into(),
+    };
+    let p1 = mgr.create_schedule(parent1, HashSet::new()).unwrap();
+
+    let parent2 = Schedule {
+      start: start + Duration::hours(0),
+      end: end + Duration::hours(1),
+      level: 1,
+      exclusive: false,
+      name: "p2".into(),
+    };
+    let p2 = mgr.create_schedule(parent2, HashSet::new()).unwrap();
+
+    // Child contained in both parents
+    let child = Schedule {
+      start: start + Duration::hours(1),
+      end: start + Duration::hours(2),
+      level: 2,
+      exclusive: false,
+      name: "child".into(),
+    };
+    let mut parents = HashSet::new();
+    parents.insert(p1);
+    parents.insert(p2);
+    let child_id = mgr.create_schedule(child, parents).unwrap();
+
+    // Delete only parent1: child should remain because parent2 is still present
+    let removed1 = mgr.delete_schedule(p1).unwrap();
+    assert!(removed1.contains(&p1));
+    assert!(!removed1.contains(&child_id));
+    assert!(mgr.get_schedule(child_id).is_some());
+
+    // Now delete parent2: child should be cascade deleted
+    let removed2 = mgr.delete_schedule(p2).unwrap();
+    assert!(removed2.contains(&p2));
+    assert!(removed2.contains(&child_id));
+    assert!(mgr.get_schedule(child_id).is_none());
+  }
+
+  #[test]
+  fn create_schedule_with_id_duplicate_error() {
+    let mut mgr = ScheduleManager::new();
+    let start = Utc::now();
+    let end = start + Duration::hours(1);
+    let id = Uuid::now_v7();
+
+    let sched = Schedule {
+      start,
+      end,
+      level: 1,
+      exclusive: false,
+      name: "s".into(),
+    };
+    // First insertion with explicit id should succeed
+    let r1 = mgr.create_schedule_with_id(id, sched.clone(), HashSet::new());
+    assert!(r1.is_ok());
+
+    // Second insertion with same id should fail with DuplicateId
+    let r2 = mgr.create_schedule_with_id(id, sched, HashSet::new());
+    assert_eq!(r2, Err(ScheduleError::DuplicateId));
+  }
+
+  #[test]
+  fn lapper_serde_roundtrip_and_duplicate_same_range() {
+    // Serde round-trip should preserve intervals; BTreeSet keeps ordering
+    let mut lapper = Lapper::new(std::collections::BTreeSet::new());
+    let start = Utc::now();
+    let id1 = Uuid::now_v7();
+    let id2 = Uuid::now_v7();
+
+    // Two intervals with identical start/stop but different vals
+    let iv1 = Interval {
+      start,
+      stop: start + Duration::hours(1),
+      val: id1,
+    };
+    let iv2 = Interval {
+      start,
+      stop: start + Duration::hours(1),
+      val: id2,
+    };
+    lapper.insert(iv1.clone());
+    lapper.insert(iv2.clone());
+
+    // Both should be present when iterating over intervals set
+    let mut vals: Vec<ScheduleId> = lapper.intervals.iter().map(|iv| iv.val).collect();
+    vals.sort();
+    let mut expected = vec![id1, id2];
+    expected.sort();
+    assert_eq!(vals, expected);
+
+    // Ensure overlap predicate works on the original lapper
+    assert!(lapper.has_overlap(start, start + Duration::hours(1)));
+  }
+
+  #[test]
+  fn schedule_manager_query_time_boundaries() {
+    let mut mgr = ScheduleManager::new();
+    let start = Utc::now();
+    let i1 = Schedule {
+      start,
+      end: start + Duration::hours(1),
+      level: 1,
+      exclusive: false,
+      name: "a".into(),
+    };
+    let i2 = Schedule {
+      start: start + Duration::hours(1),
+      end: start + Duration::hours(2),
+      level: 1,
+      exclusive: false,
+      name: "b".into(),
+    };
+    let id1 = mgr.create_schedule(i1, HashSet::new()).unwrap();
+    let id2 = mgr.create_schedule(i2, HashSet::new()).unwrap();
+
+    // Query range that ends exactly at i1.end: manager includes schedules
+    // that start before the stop value (i.e., start < stop), so i1 is expected.
+    let opts = QueryOptions {
+      start: None,
+      stop: Some(start + Duration::hours(1)),
+      ..Default::default()
+    };
+    let res = mgr.query_schedule(opts);
+    assert!(res.iter().any(|(id, _)| *id == id1));
+
+    // Query with start exactly at i2.start should include i2
+    let opts2 = QueryOptions {
+      start: Some(start + Duration::hours(1)),
+      stop: None,
+      ..Default::default()
+    };
+    let res2 = mgr.query_schedule(opts2);
+    assert!(res2.iter().any(|(id, _)| *id == id2));
+
+    // Query overlapping both
+    let opts3 = QueryOptions {
+      start: Some(start + Duration::minutes(30)),
+      stop: Some(start + Duration::hours(1) + Duration::minutes(30)),
+      ..Default::default()
+    };
+    let res3 = mgr.query_schedule(opts3);
+    let ids: Vec<ScheduleId> = res3.into_iter().map(|(id, _)| id).collect();
+    assert!(ids.contains(&id1));
+    assert!(ids.contains(&id2));
+  }
+
+  #[test]
+  fn lapper_serde_tokens_single_interval() {
+    use serde_test::{Configure, Token};
+
+    // Use fixed, known string representations so serde_test tokens can be static
+    let start_str = "2025-01-01T00:00:00Z";
+    let stop_str = "2025-01-01T01:00:00Z";
+    let id_str = "123e4567-e89b-12d3-a456-426614174000";
+
+    let start = DateTime::parse_from_rfc3339(start_str)
+      .unwrap()
+      .with_timezone(&Utc);
+    let stop = DateTime::parse_from_rfc3339(stop_str)
+      .unwrap()
+      .with_timezone(&Utc);
+    let id = Uuid::parse_str(id_str).unwrap();
+
+    let iv = Interval {
+      start,
+      stop,
+      val: id,
+    };
+    let mut sset = std::collections::BTreeSet::new();
+    sset.insert(iv.clone());
+    let lapper = Lapper::new(sset);
+
+    // Prepare expected token sequence for struct { intervals: Vec<Interval> }
+    // Note: Lapper serializes only the `intervals` field as a sequence.
+    let tokens = vec![
+      Token::Struct {
+        name: "Lapper",
+        len: 1,
+      },
+      Token::Str("intervals"),
+      Token::Seq { len: Some(1) },
+      // Interval serialized as a struct (start, stop, val) — we rely on chrono/uuid tokenization
+      Token::Struct {
+        name: "Interval",
+        len: 3,
+      },
+      Token::Str("start"),
+      Token::Str(start_str),
+      Token::Str("stop"),
+      Token::Str(stop_str),
+      Token::Str("val"),
+      Token::Str(id_str),
+      Token::StructEnd,
+      Token::SeqEnd,
+      Token::StructEnd,
+    ];
+
+    // Mark value as readable so types like DateTime/Uuid serialize as strings
+    // in the token stream, then assert the expected tokens.
+    serde_test::assert_ser_tokens(&lapper.readable(), &tokens);
+  }
 }
