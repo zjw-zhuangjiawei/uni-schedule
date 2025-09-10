@@ -1,3 +1,4 @@
+use bincode::{Decode, Encode};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -1019,7 +1020,7 @@ impl Schedule {
 /// The manager is intended to be used from a single thread; if shared
 /// across threads, callers should wrap it in appropriate synchronization
 /// primitives (e.g., `RwLock`).
-#[derive(Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct ScheduleManager {
   /// Stored schedules by their `ScheduleId`.
   schedules: HashMap<ScheduleId, Schedule>,

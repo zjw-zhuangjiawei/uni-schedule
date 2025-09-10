@@ -11,6 +11,7 @@ serde = { workspace = true }
 thiserror = "2.0.16"
 typed-builder = "0.21.2"
 uuid = { workspace = true }
+bincode = { workspace = true }
 
 [dev-dependencies]
 criterion = "0.7.0"
@@ -18,4 +19,4 @@ serde_test = "1.0"
 
 [[bench]]
 name = "schedule_bench"
-harness = true
+harness = false

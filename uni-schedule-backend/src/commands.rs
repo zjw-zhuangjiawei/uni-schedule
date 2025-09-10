@@ -158,3 +158,13 @@ pub async fn get_schedule(
     name: s.name().to_string(),
   }))
 }
+
+/// Helper to register all Tauri command handlers on a `tauri::Builder`.
+pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+  builder.invoke_handler(tauri::generate_handler![
+    create_schedule,
+    delete_schedule,
+    query_schedules,
+    get_schedule,
+  ])
+}
