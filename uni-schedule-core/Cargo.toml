@@ -9,13 +9,12 @@ edition = "2024"
 chrono = { workspace = true }
 serde = { workspace = true }
 thiserror = "2.0.16"
-typed-builder = "0.21.2"
+typed-builder = "0.22.0"
 uuid = { workspace = true }
-bincode = { workspace = true }
 
 [dev-dependencies]
 criterion = "0.7.0"
-serde_test = "1.0"
+serde_test = "1.0.177"
 
 [[bench]]
 name = "schedule_bench"
